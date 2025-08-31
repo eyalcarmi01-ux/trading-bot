@@ -1,0 +1,27 @@
+{
+  "symbol": "CL",
+  "expiry": "202510",
+  "exchange": "NYMEX",
+  "type": "future",
+  "currency": "USD",
+  "interval": 57,
+  "quantity": 1,
+
+  "tick_size": 0.01,
+  "tp_ticks_long": 60,
+  "tp_ticks_short": 60,
+  "sl_ticks": 20,
+
+  "trade_start": { "hour": 7, "minute": 0 },
+  "trade_end": { "hour": 22, "minute": 48 },
+  "force_close": { "hour": 22, "minute": 50 },
+
+  "strategy_module": "strategy.CCI14_200signal",
+
+  "last_entry_price": null,
+  "entry_price": null,
+  "take_profit": null,
+  "stop_price": null,
+
+  "position_type": null
+}
