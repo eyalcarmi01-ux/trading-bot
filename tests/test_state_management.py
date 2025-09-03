@@ -1,41 +1,12 @@
 import unittest
 from unittest.mock import MagicMock
 from algorithms.trading_algorithms_class import TradingAlgorithm
-
-
-class _IB:
-	def __init__(self):
-		self._orders = []
-		self._positions = []
-	def reqMktData(self, *a, **k):
-		return MagicMock(last=100, close=100, ask=100, bid=100)
-	def sleep(self, s):
-		pass
-	def positions(self):
-		return self._positions
-	def placeOrder(self, contract, order):
-		self._orders.append((contract, order))
-	def orders(self):
-		return self._orders
-	def cancelOrder(self, order):
-		pass
-	def disconnect(self):
-		pass
-	def connect(self, *a, **k):
-		pass
-	def qualifyContracts(self, *a, **k):
-		pass
-
-
-class MockPosition:
-	def __init__(self, contract, position):
-		self.contract = contract
-		self.position = position
+from tests.utils import MockIB, MockPosition
 
 
 class TestStateManagement(unittest.TestCase):
 	def setUp(self):
-		self.ib = _IB()
+		self.ib = MockIB()
 		params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 		self.algo = TradingAlgorithm(contract_params=params, ib=self.ib)
 

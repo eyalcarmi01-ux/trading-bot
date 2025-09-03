@@ -3,36 +3,7 @@ from unittest.mock import MagicMock
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
-
-class MockIB:
-    def __init__(self):
-        self._positions = []
-        self._orders = []
-        self.connected = False
-    def connect(self, *a, **kw):
-        self.connected = True
-    def qualifyContracts(self, contract):
-        pass
-    def reqMktData(self, contract, snapshot=True):
-        class Tick:
-            def __init__(self, price):
-                self.last = price
-                self.close = price
-                self.ask = price
-                self.bid = price
-        return Tick(100.0)  # Simulate a price of 100
-    def sleep(self, seconds):
-        pass
-    def positions(self):
-        return self._positions
-    def placeOrder(self, contract, order):
-        self._orders.append((contract, order))
-    def orders(self):
-        return self._orders
-    def cancelOrder(self, order):
-        pass
-    def disconnect(self):
-        self.connected = False
+from tests.utils import MockIB
 
 class TestTradingAlgorithms(unittest.TestCase):
     def setUp(self):

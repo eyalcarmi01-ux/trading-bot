@@ -3,38 +3,7 @@ from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
 from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
 import unittest
-
-class MockIB:
-    def __init__(self):
-        self._positions = []
-        self._orders = []
-        self.connected = False
-        self.last_order = None
-    def connect(self, *a, **kw):
-        self.connected = True
-    def qualifyContracts(self, contract):
-        pass
-    def reqMktData(self, contract, snapshot=True):
-        class Tick:
-            def __init__(self, price):
-                self.last = price
-                self.close = price
-                self.ask = price
-                self.bid = price
-        return Tick(100.0)
-    def sleep(self, seconds):
-        pass
-    def positions(self):
-        return self._positions
-    def placeOrder(self, contract, order):
-        self._orders.append((contract, order))
-        self.last_order = order
-    def orders(self):
-        return self._orders
-    def cancelOrder(self, order):
-        pass
-    def disconnect(self):
-        self.connected = False
+from tests.utils import MockIB
 
 class TestAlgorithmRegression(unittest.TestCase):
     def setUp(self):

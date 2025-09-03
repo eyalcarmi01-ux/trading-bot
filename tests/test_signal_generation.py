@@ -4,16 +4,12 @@ from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
-
-
-class _DummyIB:
-	def positions(self):
-		return []
+from tests.utils import MockIB
 
 
 class TestCCI14SignalAndDelay(unittest.TestCase):
 	def setUp(self):
-		self.ib = _DummyIB()
+		self.ib = MockIB()
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_buy_signal_then_delayed_bracket(self):
@@ -22,8 +18,8 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 		# Prepare deterministic EMA and price
 		algo.ema_fast = 50.0
 		algo.ema_slow = 50.0
-	# Pre-fill price history so CCI is computed
-	algo.price_history = [50.0] * algo.CCI_PERIOD
+		# Pre-fill price history so CCI is computed
+		algo.price_history = [50.0] * algo.CCI_PERIOD
 
 		# Patch price and CCI calculator to simulate crossing from - to +
 		prices = [60.0, 60.0, 60.0]
@@ -32,7 +28,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 
 		cci_values = [-10, +10]
 		def fake_calc_cci(_, __):
-			return cci_values.pop(0)
+			return cci_values.pop(0) if cci_values else +10
 
 		calls = []
 		algo.get_valid_price = fake_price
@@ -49,7 +45,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 				return FakeDT._now
 
 		FakeDT._now = t0
-	with patch('algorithms.cci14_trading_algorithm.datetime', FakeDT):
+		with patch('algorithms.cci14_trading_algorithm.datetime.datetime', FakeDT):
 			# Tick 1: CCI = -10 (no signal)
 			algo.on_tick('12:00:00')
 			# Ensure cci was appended once
@@ -62,14 +58,14 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 			FakeDT._now = t0 + _dt.timedelta(seconds=181)
 			algo.on_tick('12:03:01')
 
-		self.assertIn('BUY', calls)
-		self.assertIsNone(algo.signal_time)
-		self.assertIsNone(algo.signal_action)
+			self.assertIn('BUY', calls)
+			self.assertIsNone(algo.signal_time)
+			self.assertIsNone(algo.signal_action)
 
 
 class TestEMATriggering(unittest.TestCase):
 	def setUp(self):
-		self.ib = _DummyIB()
+		self.ib = MockIB()
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_long_ready_triggers_buy_on_cross(self):
@@ -97,24 +93,24 @@ class TestEMATriggering(unittest.TestCase):
 		algo.place_bracket_order = lambda action, *_a, **_k: calls.append(action)
 		algo.has_active_position = lambda: False
 
-	# First tick: price above EMA -> counting, no order
+		# First tick: price above EMA -> counting, no order
 		algo.get_valid_price = lambda: 101.0
 		algo.on_tick('12:00:00')
 		self.assertEqual(algo.signal_override, 1)
-	# Second tick: price below EMA -> set long_ready and reset override (no order yet)
+		# Second tick: price below EMA -> set long_ready and reset override (no order yet)
 		algo.get_valid_price = lambda: 99.0
 		algo.on_tick('12:00:01')
-	self.assertEqual(algo.signal_override, 0)
-	self.assertTrue(algo.long_ready)
-	# Third tick: still below EMA -> order placed
-	algo.get_valid_price = lambda: 98.5
-	algo.on_tick('12:00:02')
-	self.assertIn('BUY', calls)
+		self.assertEqual(algo.signal_override, 0)
+		self.assertTrue(algo.long_ready)
+		# Third tick: still below EMA -> order placed
+		algo.get_valid_price = lambda: 98.5
+		algo.on_tick('12:00:02')
+		self.assertIn('BUY', calls)
 
 
 class TestCCI14RevEMAUpdate(unittest.TestCase):
 	def setUp(self):
-		self.ib = _DummyIB()
+		self.ib = MockIB()
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_ema_updates_on_tick(self):
@@ -134,7 +130,7 @@ class TestCCI14RevEMAUpdate(unittest.TestCase):
 
 class TestFibonacciSignals(unittest.TestCase):
 	def setUp(self):
-		self.ib = _DummyIB()
+		self.ib = MockIB()
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_retracement_triggers_order(self):

@@ -7,35 +7,7 @@ from unittest.mock import MagicMock, patch
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
-
-class MockIB:
-    def __init__(self):
-        self.orders = []
-        self.positions_list = []
-        self.connected = True
-        self.call_count = 0
-        self.call_times = []
-
-    def reqMktData(self, contract, snapshot=True):
-        self.call_count += 1
-        self.call_times.append(time.time())
-        return MagicMock(last=100, close=100, ask=100, bid=100)
-
-    def sleep(self, seconds):
-        time.sleep(min(seconds, 0.1))  # Cap sleep for tests
-
-    def positions(self):
-        self.call_count += 1
-        return self.positions_list
-
-    def placeOrder(self, contract, order):
-        self.call_count += 1
-        self.orders.append((contract, order))
-        return MagicMock(orderId=len(self.orders))
-
-    def qualifyContracts(self, contract):
-        self.call_count += 1
-        return [contract]
+from tests.utils import MockIB
 
 class TestPerformance(unittest.TestCase):
     def setUp(self):
@@ -216,10 +188,9 @@ class TestPerformance(unittest.TestCase):
             price = float(i)
             self.mock_ib.reqMktData = MagicMock(return_value=MagicMock(last=price, close=price, ask=price, bid=price))
             algo.on_tick("12:00:00")
-        end_time = time.time()
-            
-            # Should handle large datasets efficiently
-            self.assertLess(end_time - start_time, 2.0)
+    end_time = time.time()
+    # Should handle large datasets efficiently
+    self.assertLess(end_time - start_time, 2.0)
 
     def test_repeated_signal_generation_performance(self):
         """Test performance of repeated signal generation"""
@@ -257,13 +228,13 @@ class TestPerformance(unittest.TestCase):
             ib=self.mock_ib
         )
         
-        # First run (cold cache)
-        start_time = time.time()
+    # First run (cold cache)
+    start_time = time.time()
     algo.on_tick("12:00:00")
         first_run_time = time.time() - start_time
         
         # Second run (warm cache)
-        start_time = time.time()
+    start_time = time.time()
     algo.on_tick("12:00:01")
         second_run_time = time.time() - start_time
         
