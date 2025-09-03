@@ -6,6 +6,7 @@ import unittest
 ALLOWED_TEST_MODULES = [
 	'tests.test_algorithm_edge_cases',
 	'tests.test_base_algorithm',
+	'tests.test_base_bracket_and_price',
 	'tests.test_cci14rev_trading_algorithm',
 	'tests.test_contract_validation',
 	'tests.test_performance',
