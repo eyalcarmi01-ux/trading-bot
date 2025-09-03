@@ -3,28 +3,13 @@ from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
 import unittest
+from tests.utils import MockIB
 
 class TestCCI14RevTradingAlgorithm(unittest.TestCase):
 
     def setUp(self):
-        # Provide required constructor args and a simple mock IB
-        class _IB:
-            def reqMktData(self, contract, snapshot=True):
-                class Tick:
-                    last = 100.0
-                    close = 100.0
-                    ask = 100.0
-                    bid = 100.0
-                return Tick()
-            def sleep(self, s):
-                pass
-            def positions(self):
-                return []
-            def placeOrder(self, contract, order):
-                pass
-            def qualifyContracts(self, contract):
-                return [contract]
-        self.ib = _IB()
+    # Provide required constructor args and a simple shared MockIB
+    self.ib = MockIB()
         self.algorithm = CCI14RevTradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,

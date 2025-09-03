@@ -6,38 +6,7 @@ from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
 from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
-
-
-class MockIB:
-    def __init__(self):
-        self.orders = []
-        self.positions_list = []
-        self.connected = True
-
-    def reqMktData(self, contract, snapshot=True):
-        return MagicMock(last=100, close=100, ask=100, bid=100)
-
-    def sleep(self, seconds):
-        pass
-
-    def positions(self):
-        return self.positions_list
-
-    def placeOrder(self, contract, order):
-        self.orders.append((contract, order))
-        return MagicMock(orderId=1)
-
-    def cancelOrder(self, orderId):
-        pass
-
-    def connect(self, *args, **kwargs):
-        self.connected = True
-
-    def disconnect(self):
-        self.connected = False
-
-    def qualifyContracts(self, contract):
-        return [contract]
+from tests.utils import MockIB
 
 
 # --- Advanced Edge Cases for Refactored Algorithms ---
@@ -145,7 +114,7 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
         )
         
         # Process multiple ticks and verify state consistency
-        for i in range(10):
+    for i in range(10):
             price = 100 + i * 0.1
             self.mock_ib.reqMktData = MagicMock(return_value=MagicMock(last=price, close=price, ask=price, bid=price))
             algo.on_tick(f"12:00:{i:02d}")
