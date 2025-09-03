@@ -4,28 +4,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
-
-class MockIB:
-    def __init__(self):
-        self.orders = []
-        self.positions_list = []
-        self.connected = True
-
-    def reqMktData(self, contract, snapshot=True):
-        return MagicMock(last=100, close=100, ask=100, bid=100)
-
-    def sleep(self, seconds):
-        pass
-
-    def positions(self):
-        return self.positions_list
-
-    def placeOrder(self, contract, order):
-        self.orders.append((contract, order))
-        return MagicMock(orderId=len(self.orders))
-
-    def qualifyContracts(self, contract):
-        return [contract]
+from tests.utils import MockIB
 
 class TestContractParameterValidation(unittest.TestCase):
     def setUp(self):
