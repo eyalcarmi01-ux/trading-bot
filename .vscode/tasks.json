@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"problemMatcher": [
+				"$unittest"
+			],
+			"group": "test"
+		}
+	]
+}
