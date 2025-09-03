@@ -4,7 +4,7 @@ import time
 
 class MockIB:
     def __init__(self):
-        self._orders = []
+    self._orders = []  # list of order objects
         self._positions = []
         self.connected = False
         self.last_order = None
@@ -40,12 +40,19 @@ class MockIB:
 
     def placeOrder(self, contract, order):
         self.call_count += 1
-        self._orders.append((contract, order))
+        # emulate IB assigning an orderId onto the order object itself
+        try:
+            existing_id = getattr(order, 'orderId', None)
+        except Exception:
+            existing_id = None
+        if not existing_id:
+            order.orderId = len(self._orders) + 1
+        self._orders.append(order)
         self.last_order = order
-        return MagicMock(orderId=len(self._orders))
+        return order
 
     def orders(self):
-        return self._orders
+        return list(self._orders)
 
     def cancelOrder(self, order):
         pass

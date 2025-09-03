@@ -48,3 +48,37 @@ class TestStateManagement(unittest.TestCase):
 		self.assertIsNone(new_sl)
 		self.ib.placeOrder.assert_called()
 
+	def test_monitor_stop_short_breach(self):
+		# SHORT position should breach when market >= SL
+		self.algo.current_sl_price = 101.0
+		self.ib.reqMktData = MagicMock(return_value=MagicMock(last=101.5, close=101.5, ask=101.5, bid=101.5))
+		pos = MockPosition(self.algo.contract, -2)
+		self.ib.positions = MagicMock(return_value=[pos])
+		self.ib.qualifyContracts = MagicMock()
+		self.ib.placeOrder = MagicMock()
+		self.ib.orders = MagicMock(return_value=[])
+		new_sl = self.algo.monitor_stop([pos])
+		self.assertIsNone(new_sl)
+		self.ib.placeOrder.assert_called()
+
+	def test_monitor_stop_no_breach_returns_sl(self):
+		self.algo.current_sl_price = 100.0
+		self.ib.reqMktData = MagicMock(return_value=MagicMock(last=101.0, close=101.0, ask=101.0, bid=101.0))
+		pos = MockPosition(self.algo.contract, 1)
+		self.assertEqual(self.algo.monitor_stop([pos]), 100.0)
+
+	def test_cancel_and_close_helpers(self):
+		# Verify helper methods interact with IB
+		order = MagicMock()
+		self.ib._orders = [order]
+		self.ib.cancelOrder = MagicMock()
+		self.algo.cancel_all_orders()
+		self.ib.cancelOrder.assert_called_with(order)
+
+		# close_all_positions places market orders
+		pos = MockPosition(self.algo.contract, 3)
+		self.ib.positions = MagicMock(return_value=[pos])
+		self.ib.placeOrder = MagicMock()
+		self.algo.close_all_positions()
+		self.ib.placeOrder.assert_called()
+

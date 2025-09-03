@@ -47,5 +47,48 @@ class TestTradingAlgorithms(unittest.TestCase):
         algo.on_tick('12:00:00')
         self.assertIsInstance(algo.ema_fast, float)
 
+    def test_cci14_not_enough_data_and_trim(self):
+        algo = CCI14TradingAlgorithm(
+            contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
+            check_interval=60,
+            initial_ema=100,
+            ib=self.mock_ib
+        )
+        # Not enough prices -> calculate_and_log_cci should not be called, no append
+        algo.price_history = [100.0] * (algo.CCI_PERIOD - 1)
+        algo.get_valid_price = lambda: 100.0
+        algo.on_tick('12:00:00')
+        self.assertEqual(len(algo.cci_values), 0)
+        # Fill cci_values beyond 100, ensure trimmed to last 100
+        algo.price_history = [100.0] * algo.CCI_PERIOD
+        algo.calculate_and_log_cci = lambda *_: 1.0
+        for _ in range(120):
+            algo.on_tick('12:00:00')
+        self.assertLessEqual(len(algo.cci_values), 100)
+
+    def test_cci14_reset_state(self):
+        algo = CCI14TradingAlgorithm(
+            contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
+            check_interval=60,
+            initial_ema=100,
+            ib=self.mock_ib
+        )
+        # Set some state
+        algo.ema_fast = 1
+        algo.ema_slow = 1
+        algo.signal_action = 'BUY'
+        algo.signal_time = object()
+        algo.price_history = [1]
+        algo.cci_values = [1]
+        algo.prev_cci = 1
+        algo.reset_state()
+        self.assertEqual(algo.price_history, [])
+        self.assertEqual(algo.cci_values, [])
+        self.assertIsNone(algo.prev_cci)
+        self.assertIsNone(algo.ema_fast)
+        self.assertIsNone(algo.ema_slow)
+        self.assertIsNone(algo.signal_action)
+        self.assertIsNone(algo.signal_time)
+
 if __name__ == '__main__':
     unittest.main()

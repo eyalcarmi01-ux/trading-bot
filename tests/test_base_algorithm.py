@@ -4,7 +4,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unittest.mock import MagicMock
 from algorithms.trading_algorithms_class import TradingAlgorithm
-from tests.utils import MockIB
+from tests.utils import MockIB, MockPosition
 
 class TestTradingAlgorithmBase(unittest.TestCase):
     def setUp(self):
@@ -99,6 +99,22 @@ class TestTradingAlgorithmBase(unittest.TestCase):
         # Should return boolean
         result = algo.has_active_position()
         self.assertIsInstance(result, bool)
+
+    def test_has_active_position_conid_matching(self):
+        contract_params = {'symbol': 'CL', 'exchange': 'NYMEX', 'currency': 'USD'}
+        algo = TradingAlgorithm(contract_params=contract_params, ib=self.mock_ib)
+        # Force a known conId on algo contract
+        algo.contract.conId = 123
+        # Matching position -> True
+        pos_contract_match = type('C', (), {'conId': 123})()
+        pos_match = MockPosition(pos_contract_match, 1)
+        # Non-matching position -> False
+        pos_contract_other = type('C', (), {'conId': 999})()
+        pos_other = MockPosition(pos_contract_other, 2)
+        self.mock_ib._positions = [pos_other]
+        self.assertFalse(algo.has_active_position())
+        self.mock_ib._positions = [pos_match]
+        self.assertTrue(algo.has_active_position())
 
     def test_base_algorithm_polymorphism(self):
         """Test that base class can be used polymorphically"""
