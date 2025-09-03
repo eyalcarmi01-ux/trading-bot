@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
+from unittest.mock import patch
 from algorithms.trading_algorithms_class import TradingAlgorithm
 from tests.utils import MockIB, MockPosition
 
@@ -81,4 +82,43 @@ class TestStateManagement(unittest.TestCase):
 		self.ib.placeOrder = MagicMock()
 		self.algo.close_all_positions()
 		self.ib.placeOrder.assert_called()
+
+	def test_wait_for_round_minute_computes_sleep(self):
+		# Patch datetime.now to a time with 42 seconds -> expect 18s sleep
+		import datetime as _dt
+		class FakeDT:
+			@staticmethod
+			def now():
+				return _dt.datetime(2025, 1, 1, 12, 0, 42)
+		with patch('algorithms.trading_algorithms_class.datetime.datetime', FakeDT):
+			with patch('algorithms.trading_algorithms_class.time.sleep') as sleep_mock:
+				self.algo.wait_for_round_minute()
+				sleep_mock.assert_called_once()
+				args, _ = sleep_mock.call_args
+				self.assertEqual(args[0], 18)
+
+	def test_run_invokes_on_tick_once(self):
+		# Subclass to break the loop using SystemExit (not caught by except Exception)
+		class OneShotAlgo(TradingAlgorithm):
+			def __init__(self, *a, **kw):
+				super().__init__(*a, **kw)
+				self.CHECK_INTERVAL = 0
+				self.calls = 0
+			def on_tick(self, time_str):
+				self.calls += 1
+				raise SystemExit()
+		params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
+		algo = OneShotAlgo(contract_params=params, ib=self.ib)
+		# Patch sleeps to no-op and time to an active trading time
+		algo.ib.sleep = lambda *_a, **_k: None
+		class FakeDT2:
+			@staticmethod
+			def now():
+				import datetime as _dt
+				return _dt.datetime(2025, 1, 1, 12, 0, 0)
+		with patch('algorithms.trading_algorithms_class.datetime.datetime', FakeDT2):
+			with patch('algorithms.trading_algorithms_class.time.sleep', lambda *_a, **_k: None):
+				with self.assertRaises(SystemExit):
+					algo.run()
+		self.assertEqual(algo.calls, 1)
 
