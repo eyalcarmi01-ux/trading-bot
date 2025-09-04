@@ -79,16 +79,16 @@ class TestContractParameterValidation(unittest.TestCase):
     def test_futures_contract_parameters(self):
         """Test futures-specific contract parameters"""
         futures_params = {
-            'symbol': 'ES',
-            'lastTradeDateOrContractMonth': '202603',
-            'exchange': 'CME',
+            'symbol': 'CL',
+            'lastTradeDateOrContractMonth': '202601',
+            'exchange': 'NYMEX',
             'currency': 'USD'
         }
         
         algo = self._create_ema_algorithm(futures_params)
         
-        self.assertEqual(algo.contract.symbol, 'ES')
-        self.assertEqual(algo.contract.lastTradeDateOrContractMonth, '202603')
+        self.assertEqual(algo.contract.symbol, 'CL')
+        self.assertEqual(algo.contract.lastTradeDateOrContractMonth, '202601')
 
     def test_different_contract_types(self):
         """Test different contract types"""

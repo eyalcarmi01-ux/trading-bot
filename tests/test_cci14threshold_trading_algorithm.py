@@ -11,10 +11,10 @@ class TestCCI14ThresholdTradingAlgorithm(unittest.TestCase):
     def setUp(self):
         self.ib = MockIB()
         self.contract_params = {
-            'symbol': 'ES',
-            'exchange': 'CME',
+            'symbol': 'CL',
+            'exchange': 'NYMEX',
             'currency': 'USD',
-            'lastTradeDateOrContractMonth': '202603',
+            'lastTradeDateOrContractMonth': '202601',
         }
         self.algo = CCI14ThresholdTradingAlgorithm(
             self.contract_params,

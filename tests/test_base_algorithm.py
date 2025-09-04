@@ -45,10 +45,10 @@ class TestTradingAlgorithmBase(unittest.TestCase):
     def test_base_algorithm_contract_creation(self):
         """Test contract creation from parameters"""
         contract_params = {
-            'symbol': 'ES',
-            'exchange': 'CME',
+            'symbol': 'CL',
+            'exchange': 'NYMEX',
             'currency': 'USD',
-            'lastTradeDateOrContractMonth': '202603'
+            'lastTradeDateOrContractMonth': '202601'
         }
         
         algo = TradingAlgorithm(
@@ -56,8 +56,8 @@ class TestTradingAlgorithmBase(unittest.TestCase):
             ib=self.mock_ib
         )
         
-        self.assertEqual(algo.contract.symbol, 'ES')
-        self.assertEqual(algo.contract.exchange, 'CME')
+        self.assertEqual(algo.contract.symbol, 'CL')
+        self.assertEqual(algo.contract.exchange, 'NYMEX')
         self.assertEqual(algo.contract.currency, 'USD')
 
     def test_base_algorithm_has_valid_price_method(self):
