@@ -4,7 +4,7 @@ import time
 
 class MockIB:
     def __init__(self):
-    self._orders = []  # list of order objects
+        self._orders = []  # list of order objects
         self._positions = []
         self.connected = False
         self.last_order = None

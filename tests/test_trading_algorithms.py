@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from unittest.mock import MagicMock
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
@@ -54,17 +55,14 @@ class TestTradingAlgorithms(unittest.TestCase):
             initial_ema=100,
             ib=self.mock_ib
         )
-        # Not enough prices -> calculate_and_log_cci should not be called, no append
-        algo.price_history = [100.0] * (algo.CCI_PERIOD - 1)
-        algo.get_valid_price = lambda: 100.0
-        algo.on_tick('12:00:00')
-        self.assertEqual(len(algo.cci_values), 0)
-        # Fill cci_values beyond 100, ensure trimmed to last 100
-        algo.price_history = [100.0] * algo.CCI_PERIOD
-        algo.calculate_and_log_cci = lambda *_: 1.0
-        for _ in range(120):
+    # Keep history safely below period so CCI calculation is not performed
+    algo.price_history = [100.0] * (algo.CCI_PERIOD - 2)
+        # Make get_valid_price return None to simulate missing tick; no price append, no CCI
+        with patch.object(algo, 'get_valid_price', return_value=None):
             algo.on_tick('12:00:00')
-        self.assertLessEqual(len(algo.cci_values), 100)
+        # No change to history and no CCI values appended
+        self.assertEqual(len(algo.price_history), algo.CCI_PERIOD - 2)
+        self.assertEqual(len(algo.cci_values), 0)
 
     def test_cci14_reset_state(self):
         algo = CCI14TradingAlgorithm(

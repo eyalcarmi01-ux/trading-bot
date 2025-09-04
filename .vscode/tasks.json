@@ -10,6 +10,76 @@
 				"$unittest"
 			],
 			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
+		},
+		{
+			"label": "Run all unittests",
+			"type": "shell",
+			"command": "python3 -m unittest discover -v",
+			"args": [],
+			"group": "test"
 		}
 	]
 }

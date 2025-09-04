@@ -86,10 +86,11 @@ class TestStateManagement(unittest.TestCase):
 	def test_wait_for_round_minute_computes_sleep(self):
 		# Patch datetime.now to a time with 42 seconds -> expect 18s sleep
 		import datetime as _dt
-		class FakeDT:
-			@staticmethod
-			def now():
-				return _dt.datetime(2025, 1, 1, 12, 0, 42)
+		class FakeDT(_dt.datetime):
+			@classmethod
+			def now(cls, tz=None):
+				base = _dt.datetime(2025, 1, 1, 12, 0, 42)
+				return base.replace(tzinfo=tz) if tz else base
 		with patch('algorithms.trading_algorithms_class.datetime.datetime', FakeDT):
 			with patch('algorithms.trading_algorithms_class.time.sleep') as sleep_mock:
 				self.algo.wait_for_round_minute()
@@ -111,11 +112,12 @@ class TestStateManagement(unittest.TestCase):
 		algo = OneShotAlgo(contract_params=params, ib=self.ib)
 		# Patch sleeps to no-op and time to an active trading time
 		algo.ib.sleep = lambda *_a, **_k: None
-		class FakeDT2:
-			@staticmethod
-			def now():
-				import datetime as _dt
-				return _dt.datetime(2025, 1, 1, 12, 0, 0)
+		import datetime as _dt
+		class FakeDT2(_dt.datetime):
+			@classmethod
+			def now(cls, tz=None):
+				base = _dt.datetime(2025, 1, 1, 12, 0, 0)
+				return base.replace(tzinfo=tz) if tz else base
 		with patch('algorithms.trading_algorithms_class.datetime.datetime', FakeDT2):
 			with patch('algorithms.trading_algorithms_class.time.sleep', lambda *_a, **_k: None):
 				with self.assertRaises(SystemExit):
