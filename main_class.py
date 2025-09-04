@@ -9,7 +9,9 @@ from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
 # Example contract parameters (customize as needed for each algo)
 ema_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 fib_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
-cci_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
+# Use distinct contracts for each CCI algorithm
+cci14_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
+cci14rev_contract_params = dict(symbol='ES', lastTradeDateOrContractMonth='202603', exchange='CME', currency='USD')
 
 
 
@@ -30,14 +32,14 @@ fib_algo = FibonacciTradingAlgorithm(
 )
 
 cci_algo = CCI14TradingAlgorithm(
-    contract_params=cci_contract_params,
+    contract_params=cci14_contract_params,
     check_interval=60,
     initial_ema=80,  # Example value, replace as needed
     client_id=19
 )
 
 cci14rev_algo = CCI14RevTradingAlgorithm(
-    contract_params=cci_contract_params,
+    contract_params=cci14rev_contract_params,
     check_interval=60,
     initial_ema=80,  # Example value, replace as needed
     client_id=20
