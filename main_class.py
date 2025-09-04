@@ -1,4 +1,5 @@
 import threading
+import asyncio
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
@@ -63,6 +64,12 @@ cci14threshold_algo = CCI14ThresholdTradingAlgorithm(
 algorithms = [ema_algo, fib_algo, cci_algo, cci14rev_algo, cci14threshold_algo]  # Add others as you implement them
 
 def run_algo(algo):
+    # Ensure this thread has an asyncio event loop for ib_insync compatibility
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     algo.run()
 
 if __name__ == "__main__":
