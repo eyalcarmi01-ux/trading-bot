@@ -3,7 +3,7 @@ from unittest.mock import patch
 from unittest.mock import MagicMock
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
-from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
+from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
 from tests.utils import MockIB
 
 class TestTradingAlgorithms(unittest.TestCase):
@@ -12,7 +12,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         # Patch TradingAlgorithm base to use mock IB
         EMATradingAlgorithm.__bases__[0].ib = self.mock_ib
         FibonacciTradingAlgorithm.__bases__[0].ib = self.mock_ib
-        CCI14TradingAlgorithm.__bases__[0].ib = self.mock_ib
+    CCI14_Compare_TradingAlgorithm.__bases__[0].ib = self.mock_ib
 
     def test_ema_on_tick(self):
         algo = EMATradingAlgorithm(
@@ -37,7 +37,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertIsInstance(algo.fib_retracements, list)
 
     def test_cci14_on_tick(self):
-        algo = CCI14TradingAlgorithm(
+    algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
@@ -49,7 +49,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertIsInstance(algo.ema_fast, float)
 
     def test_cci14_not_enough_data_and_trim(self):
-        algo = CCI14TradingAlgorithm(
+    algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
@@ -65,7 +65,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertEqual(len(algo.cci_values), 0)
 
     def test_cci14_reset_state(self):
-        algo = CCI14TradingAlgorithm(
+    algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,

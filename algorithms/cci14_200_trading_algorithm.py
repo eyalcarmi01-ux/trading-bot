@@ -3,10 +3,10 @@ from zoneinfo import ZoneInfo
 from statistics import stdev, mean
 from typing import Optional, Tuple
 
-from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
+from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
 
 
-class CCI14ThresholdTradingAlgorithm(CCI14TradingAlgorithm):
+class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
     """
     A CCI14-based strategy that triggers immediately when CCI crosses ±200:
       - If CCI > +200 -> SELL
@@ -21,9 +21,9 @@ class CCI14ThresholdTradingAlgorithm(CCI14TradingAlgorithm):
         check_interval,
         initial_ema,
         *,
-    trade_timezone: str = "Asia/Jerusalem",
-    trade_start: Optional[Tuple[int, int]] = (8, 0),
-    trade_end: Optional[Tuple[int, int]] = (22, 0),
+        trade_timezone: str = "Asia/Jerusalem",
+        trade_start: Optional[Tuple[int, int]] = (8, 0),
+        trade_end: Optional[Tuple[int, int]] = (22, 0),
         ib=None,
         **kwargs,
     ):
@@ -58,12 +58,12 @@ class CCI14ThresholdTradingAlgorithm(CCI14TradingAlgorithm):
     def on_tick(self, time_str: str):
         # Gate by trading window
         if not self.should_trade_now():
-            print(f"{time_str} ⏸️ Outside trading window — skipping")
+            self.log(f"{time_str} ⏸️ Outside trading window — skipping")
             return
 
         price = self.get_valid_price()
         if price is None:
-            print(f"{time_str} ⚠️ Invalid price — skipping\n")
+            self.log(f"{time_str} ⚠️ Invalid price — skipping\n")
             return
 
         # Update EMAs (same as parent) and log
@@ -84,7 +84,7 @@ class CCI14ThresholdTradingAlgorithm(CCI14TradingAlgorithm):
 
         # Block if already in a position
         if self.has_active_position():
-            print(f"{time_str} 🚫 BLOCKED: Trade already active\n")
+            self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
             return
 
         if cci is None:
@@ -107,4 +107,4 @@ class CCI14ThresholdTradingAlgorithm(CCI14TradingAlgorithm):
                 self.TP_TICKS_LONG,
                 self.TP_TICKS_SHORT,
             )
-            print(f"{time_str} ✅ Bracket sent ({action}) on CCI14 ±200 threshold\n")
+            self.log(f"{time_str} ✅ Bracket sent ({action}) on CCI14 ±200 threshold\n")

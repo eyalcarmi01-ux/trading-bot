@@ -11,6 +11,10 @@ class MockIB:
         # Performance counters
         self.call_count = 0
         self.call_times = []
+        # Optional injection for historical data scenarios
+        self._historical_overrides = {}
+        # Trades list to emulate ib.trades()
+        self._trades = []
 
     # --- IB-like methods used by tests/algorithms ---
     def connect(self, *a, **kw):
@@ -18,6 +22,10 @@ class MockIB:
 
     def disconnect(self):
         self.connected = False
+
+    # Align with ib_insync IB interface used in algorithms
+    def isConnected(self):
+        return self.connected
 
     def qualifyContracts(self, contract):
         self.call_count += 1
@@ -56,6 +64,36 @@ class MockIB:
 
     def cancelOrder(self, order):
         pass
+
+    def trades(self):
+        # Return a shallow copy to avoid external mutation during iteration
+        return list(self._trades)
+
+    # --- Historical data emulation used by Fibonacci legacy mode ---
+    class _Bar:
+        def __init__(self, open_, high, low, close):
+            self.open = open_
+            self.high = high
+            self.low = low
+            self.close = close
+
+    def reqHistoricalData(self, contract, endDateTime='', durationStr='', barSizeSetting='', whatToShow='TRADES', useRTH=True):
+        # Allow tests to override by (durationStr, barSizeSetting) key
+        key = (durationStr or '', barSizeSetting or '')
+        if key in self._historical_overrides:
+            return self._historical_overrides[key]
+        # Defaults: 2 daily bars and 120 hourly bars with simple values
+        if barSizeSetting == '1 day':
+            # Two days: day-2 open/close lower, day-1 higher to be bullish
+            return [
+                self._Bar(100.0, 110.0, 95.0, 105.0),  # older
+                self._Bar(106.0, 116.0, 101.0, 115.0),  # most recent
+            ]
+        if barSizeSetting == '1 hour':
+            n = 120 if durationStr in ('120 H', '3 D') else 60
+            base = 100.0
+            return [self._Bar(base + i * 0.1, base + i * 0.1, base + i * 0.1, base + i * 0.1) for i in range(n)]
+        return []
 
 
 class MockPosition:

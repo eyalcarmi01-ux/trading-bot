@@ -17,6 +17,8 @@ class TestCCI14_120_TradingAlgorithm(unittest.TestCase):
         self.assertIsInstance(self.algorithm, CCI14_120_TradingAlgorithm)
 
     def test_on_tick_runs(self):
+        # Bypass connection requirement
+        self.algorithm.get_valid_price = lambda: 100.0
         self.algorithm.on_tick('12:00:00')
 
     def test_invalid_price_preserves_emas(self):
@@ -29,7 +31,7 @@ class TestCCI14_120_TradingAlgorithm(unittest.TestCase):
 
     def test_trim_and_reset(self):
         self.algorithm.price_history = [100.0] * self.algorithm.CCI_PERIOD
-        self.ib.reqMktData = lambda *_a, **_k: type('Tick', (), {'last': 100.0, 'close': 100.0, 'ask': 100.0, 'bid': 100.0})()
+        self.algorithm.get_valid_price = lambda: 100.0
         for _ in range(130):
             self.algorithm.on_tick('12:00:00')
         self.assertLessEqual(len(self.algorithm.cci_values), 100)
@@ -43,13 +45,11 @@ class TestCCI14_120_TradingAlgorithm(unittest.TestCase):
     def test_active_direction_clears_after_position_close(self):
         self.algorithm.active_direction = 'LONG'
         self.algorithm.current_sl_price = None
-        self.ib.reqMktData = lambda *_a, **_k: type('Tick', (), {'last': 100.0, 'close': 100.0, 'ask': 100.0, 'bid': 100.0})()
+        self.algorithm.get_valid_price = lambda: 100.0
         calls = []
-
         def _hap():
             calls.append(1)
             return len(calls) == 1
-
         self.algorithm.has_active_position = _hap
         self.algorithm.monitor_stop = lambda *_a, **_k: None
         self.algorithm.check_fills_and_reset_state = lambda: None

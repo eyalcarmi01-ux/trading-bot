@@ -5,6 +5,8 @@ import datetime
 class EMATradingAlgorithm(TradingAlgorithm):
 	def __init__(self, contract_params, ema_period, check_interval, initial_ema, signal_override, ib=None, **kwargs):
 		super().__init__(contract_params, ib=ib, **kwargs)
+		# Ensure EMA algorithm logs to console (designated console-visible strategy)
+		self.log_to_console = True
 		self.EMA_PERIOD = ema_period
 		self.K = 2 / (self.EMA_PERIOD + 1)
 		self.CHECK_INTERVAL = check_interval
@@ -23,7 +25,7 @@ class EMATradingAlgorithm(TradingAlgorithm):
 	def on_tick(self, time_str):
 		price = self.get_valid_price()
 		if price is None:
-			print(f"{time_str} ⚠️ Invalid price — skipping")
+			self.log(f"{time_str} ⚠️ Invalid price — skipping")
 			return
 		previous_ema = self.live_ema
 		self.live_ema = self.calculate_ema(price, previous_ema, self.K)
@@ -35,67 +37,67 @@ class EMATradingAlgorithm(TradingAlgorithm):
 			self.handle_active_position(time_str)
 			return
 		if self.signal_override == 1 and price < self.live_ema:
-			print(f"{time_str} ⏩ Buy signal")
+			self.log(f"{time_str} ⏩ Buy signal")
 			self.signal_override = 0
 			self.long_ready = True
 			return
 		elif self.signal_override == -1 and price > self.live_ema:
-			print(f"{time_str} ⏩ Sell signal")
+			self.log(f"{time_str} ⏩ Sell signal")
 			self.signal_override = 0
 			self.short_ready = True
 			return
 		if self.signal_override == 1:
 			if self.long_counter == 0:
 				self.long_counter = 15
-				print(f"{time_str} ⏩ LONG override initialized | long_counter: {self.long_counter}")
+				self.log(f"{time_str} ⏩ LONG override initialized | long_counter: {self.long_counter}")
 			elif price > self.live_ema:
 				self.long_counter += 1
 				self.short_counter = 0
-				print(f"{time_str} ⏳ LONG override counting | long_counter: {self.long_counter}")
+				self.log(f"{time_str} ⏳ LONG override counting | long_counter: {self.long_counter}")
 				if self.long_counter >= 15 and not self.long_ready:
 					self.long_ready = True
-					print(f"{time_str} ✅ LONG setup ready [override]")
+					self.log(f"{time_str} ✅ LONG setup ready [override]")
 			elif price < self.live_ema:
 				self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				self.long_ready = False
 				self.long_counter = 0
 				self.signal_override = 0
-				print(f"{time_str} ✅ LONG override entry executed @ {price}")
+				self.log(f"{time_str} ✅ LONG override entry executed @ {price}")
 			return
 		if self.signal_override == -1:
 			if self.short_counter == 0:
 				self.short_counter = 15
-				print(f"{time_str} ⏩ SHORT override initialized | short_counter: {self.short_counter}")
+				self.log(f"{time_str} ⏩ SHORT override initialized | short_counter: {self.short_counter}")
 			elif price < self.live_ema:
 				self.short_counter += 1
 				self.long_counter = 0
-				print(f"{time_str} ⏳ SHORT override counting | short_counter: {self.short_counter}")
+				self.log(f"{time_str} ⏳ SHORT override counting | short_counter: {self.short_counter}")
 				if self.short_counter >= 15 and not self.short_ready:
 					self.short_ready = True
-					print(f"{time_str} ✅ SHORT setup ready [override]")
+					self.log(f"{time_str} ✅ SHORT setup ready [override]")
 			elif price > self.live_ema:
 				self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				self.short_ready = False
 				self.short_counter = 0
 				self.signal_override = 0
-				print(f"{time_str} ✅ SHORT override entry executed @ {price}")
+				self.log(f"{time_str} ✅ SHORT override entry executed @ {price}")
 			return
 		if price > self.live_ema:
 			self.long_counter += 1
 			self.short_counter = 0
-			print(f"{time_str} 📈 LONG candle #{self.long_counter}")
+			self.log(f"{time_str} 📈 LONG candle #{self.long_counter}")
 			if self.long_counter >= 15 and not self.long_ready:
 				self.long_ready = True
-				print(f"{time_str} ✅ LONG setup ready")
+				self.log(f"{time_str} ✅ LONG setup ready")
 		elif price < self.live_ema:
 			self.short_counter += 1
 			self.long_counter = 0
-			print(f"{time_str} 📉 SHORT candle #{self.short_counter}")
+			self.log(f"{time_str} 📉 SHORT candle #{self.short_counter}")
 			if self.short_counter >= 15 and not self.short_ready:
 				self.short_ready = True
-				print(f"{time_str} ✅ SHORT setup ready")
+				self.log(f"{time_str} ✅ SHORT setup ready")
 		else:
-			print(f"{time_str} ⚖️ NEUTRAL candle — counters reset")
+			self.log(f"{time_str} ⚖️ NEUTRAL candle — counters reset")
 		if self.long_ready and not self.has_active_position() and price < self.live_ema:
 			self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 			self.long_ready = False
@@ -107,7 +109,7 @@ class EMATradingAlgorithm(TradingAlgorithm):
 			self.short_counter = 0
 			self.signal_override = 0
 		else:
-			print(f"{time_str} 🔍 No valid signal")
+			self.log(f"{time_str} 🔍 No valid signal")
 
 	def reset_state(self):
 		self.signal_override = 0

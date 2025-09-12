@@ -4,8 +4,8 @@ import math
 from unittest.mock import MagicMock
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
-from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
-from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
+from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
+from algorithms.cci14_120_trading_algorithm import CCI14_120_TradingAlgorithm
 from tests.utils import MockIB
 
 
@@ -16,7 +16,7 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14rev_invalid_price_handling(self):
         """Test CCI14Rev algorithm with invalid price data"""
-        algo = CCI14RevTradingAlgorithm(
+    algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
@@ -30,7 +30,7 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14rev_nan_price_handling(self):
         """Test CCI14Rev algorithm with NaN price data"""
-        algo = CCI14RevTradingAlgorithm(
+    algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
@@ -71,7 +71,7 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14_algorithm_zero_deviation(self):
         """Test CCI14 algorithm with zero standard deviation"""
-        algo = CCI14TradingAlgorithm(
+    algo = CCI14_Compare_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
@@ -106,7 +106,7 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_algorithm_state_consistency(self):
         """Test that algorithm states remain consistent"""
-        algo = CCI14RevTradingAlgorithm(
+    algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,

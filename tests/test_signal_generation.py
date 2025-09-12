@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
-from algorithms.cci14_trading_algorithm import CCI14TradingAlgorithm
+from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
-from algorithms.cci14rev_trading_algorithm import CCI14RevTradingAlgorithm
+from algorithms.cci14_120_trading_algorithm import CCI14_120_TradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
 from tests.utils import MockIB
 
@@ -13,7 +13,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_buy_signal_then_delayed_bracket(self):
-		algo = CCI14TradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=50, ib=self.ib)
+		algo = CCI14_Compare_TradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=50, ib=self.ib)
 
 		# Prepare deterministic EMA and price
 		algo.ema_fast = 50.0
@@ -45,7 +45,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 				return FakeDT._now
 
 		FakeDT._now = t0
-		with patch('algorithms.cci14_trading_algorithm.datetime.datetime', FakeDT):
+		with patch('algorithms.cci14_compare_trading_algorithm.datetime.datetime', FakeDT):
 			# Tick 1: CCI = -10 (no signal)
 			algo.on_tick('12:00:00')
 			# Ensure cci was appended once
@@ -63,7 +63,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 			self.assertIsNone(algo.signal_action)
 
 	def test_sell_signal_then_delayed_bracket(self):
-		algo = CCI14TradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=50, ib=self.ib)
+		algo = CCI14_Compare_TradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=50, ib=self.ib)
 
 		# Prepare deterministic EMA and price
 		algo.ema_fast = 50.0
@@ -87,7 +87,7 @@ class TestCCI14SignalAndDelay(unittest.TestCase):
 				return FakeDT._now
 
 		FakeDT._now = t0
-		with patch('algorithms.cci14_trading_algorithm.datetime.datetime', FakeDT):
+		with patch('algorithms.cci14_compare_trading_algorithm.datetime.datetime', FakeDT):
 			algo.on_tick('12:00:00')  # CCI +10
 			algo.on_tick('12:00:01')  # CCI -10 -> SELL signal
 			self.assertEqual(algo.signal_action, 'SELL')
@@ -167,7 +167,7 @@ class TestCCI14RevEMAUpdate(unittest.TestCase):
 		self.contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
 	def test_ema_updates_on_tick(self):
-		algo = CCI14RevTradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=100.0, ib=self.ib)
+		algo = CCI14_120_TradingAlgorithm(contract_params=self.contract_params, check_interval=60, initial_ema=100.0, ib=self.ib)
 		# Pre-fill to enable fast EMA computation
 		algo.price_history = [100.0] * algo.EMA_FAST_PERIOD
 		algo.ema_fast = None
