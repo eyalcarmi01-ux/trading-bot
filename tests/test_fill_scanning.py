@@ -43,7 +43,7 @@ class TestFillScanning(unittest.TestCase):
         tp_id = self.algo._last_tp_id
         # Inject a trade fill for TP
         self.ib._trades = [self._make_trade(tp_id, 'Filled')]
-        self.algo.check_fills_and_reset_state()
+        self.algo._check_fills_and_reset_state()
         # Ensure tracked ids cleared and reset_state called
         self.assertIsNone(self.algo._last_tp_id)
         self.assertIsNone(self.algo._last_sl_id)
@@ -57,7 +57,7 @@ class TestFillScanning(unittest.TestCase):
         sl_id = self.algo._last_sl_id
         # Inject a trade fill for SL
         self.ib._trades = [self._make_trade(sl_id, 'Filled')]
-        self.algo.check_fills_and_reset_state()
+        self.algo._check_fills_and_reset_state()
         # Ensure tracked ids cleared and reset_state called
         self.assertIsNone(self.algo._last_tp_id)
         self.assertIsNone(self.algo._last_sl_id)

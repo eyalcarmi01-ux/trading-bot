@@ -92,7 +92,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
             self.algo.on_tick('07:00:00')
         self.assertEqual(len(self.ib.orders()), 0)
 
-    @patch('algorithms.cci14threshold_trading_algorithm.datetime')
+    @patch('algorithms.cci14_200_trading_algorithm.datetime')
     def test_block_when_active_position(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime

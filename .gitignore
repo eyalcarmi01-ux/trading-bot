@@ -1,2 +1,19 @@
 # Ignore duplicate root-level test files
 /test_*.py
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Coverage and test artifacts
+.coverage
+coverage_html/
+.pytest_cache/
+
+# Logs
+logs/

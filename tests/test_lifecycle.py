@@ -46,7 +46,7 @@ class TestLifecyclePhases(unittest.TestCase):
         self.algo.current_sl_price = 101.0  # market is 100 -> breach for LONG (price <= SL)
         self.algo.current_direction = 'LONG'
         # Trigger monitor_stop
-        self.algo.monitor_stop(self.ib.positions())
+        self.algo._monitor_stop(self.ib.positions())
         # Verify full EXITING->CLOSED->IDLE cycle
         expected = [
             ('IDLE', 'EXITING'),

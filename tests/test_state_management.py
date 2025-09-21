@@ -45,7 +45,7 @@ class TestStateManagement(unittest.TestCase):
 		self.ib.qualifyContracts = MagicMock()
 		self.ib.placeOrder = MagicMock()
 		self.ib.orders = MagicMock(return_value=[])
-		new_sl = self.algo.monitor_stop([pos])
+		new_sl = self.algo._monitor_stop([pos])
 		self.assertIsNone(new_sl)
 		self.ib.placeOrder.assert_called()
 
@@ -58,7 +58,7 @@ class TestStateManagement(unittest.TestCase):
 		self.ib.qualifyContracts = MagicMock()
 		self.ib.placeOrder = MagicMock()
 		self.ib.orders = MagicMock(return_value=[])
-		new_sl = self.algo.monitor_stop([pos])
+		new_sl = self.algo._monitor_stop([pos])
 		self.assertIsNone(new_sl)
 		self.ib.placeOrder.assert_called()
 
@@ -66,7 +66,7 @@ class TestStateManagement(unittest.TestCase):
 		self.algo.current_sl_price = 100.0
 		self.ib.reqMktData = MagicMock(return_value=MagicMock(last=101.0, close=101.0, ask=101.0, bid=101.0))
 		pos = MockPosition(self.algo.contract, 1)
-		self.assertEqual(self.algo.monitor_stop([pos]), 100.0)
+		self.assertEqual(self.algo._monitor_stop([pos]), 100.0)
 
 	def test_cancel_and_close_helpers(self):
 		# Verify helper methods interact with IB
@@ -93,7 +93,7 @@ class TestStateManagement(unittest.TestCase):
 				return base.replace(tzinfo=tz) if tz else base
 		with patch('algorithms.trading_algorithms_class.datetime.datetime', FakeDT):
 			with patch('algorithms.trading_algorithms_class.time.sleep') as sleep_mock:
-				self.algo.wait_for_round_minute()
+				self.algo._wait_for_round_minute()
 				sleep_mock.assert_called_once()
 				args, _ = sleep_mock.call_args
 				self.assertEqual(args[0], 18)

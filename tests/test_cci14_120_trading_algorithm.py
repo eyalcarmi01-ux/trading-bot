@@ -52,7 +52,7 @@ class TestCCI14_120_TradingAlgorithm(unittest.TestCase):
             return len(calls) == 1
         self.algorithm.has_active_position = _hap
         self.algorithm.monitor_stop = lambda *_a, **_k: None
-        self.algorithm.check_fills_and_reset_state = lambda: None
+        self.algorithm._check_fills_and_reset_state = lambda: None
         self.algorithm.on_tick('12:34:56')
         self.assertIsNone(self.algorithm.active_direction)
 

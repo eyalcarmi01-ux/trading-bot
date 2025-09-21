@@ -300,8 +300,8 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 		if self.has_active_position():
 			if self.current_sl_price is not None:
 				positions = self.ib.positions()
-				self.current_sl_price = self.monitor_stop(positions)
-			self.handle_active_position(time_str)
+				self.current_sl_price = self._monitor_stop(positions)
+			self._handle_active_position(time_str)
 			return
 		# Simple bounce/reject logic near fib level
 		signal = None

@@ -128,7 +128,7 @@ class TestTradingAlgorithmBase(unittest.TestCase):
         self.assertIsInstance(algo, TradingAlgorithm)
         
         # Should have core methods
-        core_methods = ['get_valid_price', 'update_price_history', 'has_active_position', 'handle_active_position']
+        core_methods = ['get_valid_price', 'update_price_history', 'has_active_position', '_handle_active_position']
         for method in core_methods:
             self.assertTrue(hasattr(algo, method), f"Missing method: {method}")
 

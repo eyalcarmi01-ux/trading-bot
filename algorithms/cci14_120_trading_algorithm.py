@@ -127,7 +127,7 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		# Check for active position
 		if self.has_active_position():
 			# Invoke base position handler to enable manual SL breach monitoring & fill scanning
-			self.handle_active_position(time_str)
+			self._handle_active_position(time_str)
 			# If handler closed position (manual SL or fill) clear direction
 			if (not self.has_active_position()) and self.active_direction and self.current_sl_price is None:
 				self.active_direction = None

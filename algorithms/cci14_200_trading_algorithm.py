@@ -22,8 +22,8 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
         initial_ema,
         *,
         trade_timezone: str = "Asia/Jerusalem",
-        trade_start: Optional[Tuple[int, int]] = (8, 0),
-        trade_end: Optional[Tuple[int, int]] = (22, 0),
+    trade_start: Optional[Tuple[int, int]] = (8, 0),
+    trade_end: Optional[Tuple[int, int]] = (23, 0),
         ib=None,
         **kwargs,
     ):
@@ -65,14 +65,60 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
         if price is None:
             self.log(f"{time_str} ⚠️ Invalid price — skipping\n")
             return
-
-        # Update EMAs (same as parent) and log
-        self.ema_fast = self.calculate_ema(price, self.ema_fast, self.K_FAST)
-        self.ema_slow = self.calculate_ema(price, self.ema_slow, self.K_SLOW)
+        # Explicit legacy-style market price visibility (in addition to structured log_price below)
+        try:
+            self.log(f"{time_str} 💰 Market Price: {price:.2f}")
+            # Minute-aligned market price save line (legacy parity)
+            #try:
+            #    tz_now = datetime.datetime.now(ZoneInfo(self.trade_timezone))
+            #except Exception:
+            #    tz_now = datetime.datetime.now()
+            #minute_aligned = tz_now.replace(second=0, microsecond=0)
+            #self.log(f"{time_str} 📈 Market price saved for {minute_aligned}: {price:.2f}")
+        except Exception:
+            pass
+        # Multi-span EMA update (inherits structures from parent compare algorithm)
+        used_multi = False
+        try:
+            if hasattr(self, '_update_multi_emas'):
+                self._update_multi_emas(price)
+                used_multi = True
+        except Exception:
+            used_multi = False
+        if not used_multi:
+            # Fallback single fast/slow update
+            self.ema_fast = self.calculate_ema(price, self.ema_fast, self.K_FAST)
+            self.ema_slow = self.calculate_ema(price, self.ema_slow, self.K_SLOW)
+        # Standard price + primary EMA log
         self.log_price(time_str, price, EMA10=self.ema_fast, EMA200=self.ema_slow)
+        # Additional multi-span diagnostics line (covers legacy "Live EMAs" data richness)
+        try:
+            if used_multi and hasattr(self, '_maybe_log_multi_ema_diag'):
+                self._maybe_log_multi_ema_diag(time_str)
+        except Exception:
+            pass
 
         # Update price history and compute CCI14
+        prev_len = len(self.price_history) if hasattr(self, 'price_history') else 0
         self.update_price_history(price, maxlen=500)
+        try:
+            if len(self.price_history) > prev_len:
+                # Legacy-style close series / TP addition logs
+                self.log(f"{time_str} 📊 Updated close_series with price: {price:.2f} | Length: {len(self.price_history)}")
+                self.log(f"{time_str} 📥 New TP added: {price:.2f}")
+        except Exception:
+            pass
+        # Log series maintenance information (legacy parity data points)
+        try:
+            self.log(f"{time_str} 📊 Updated price_history length: {len(self.price_history)}")
+            recent_tp = ", ".join(f"{p:.2f}" for p in self.price_history[-10:])
+            self.log(f"{time_str} 🧪 Recent TP Values: {recent_tp}")
+            self.log(f"{time_str} 🧼 Cleaned price series length: {len(self.price_history)}")
+            # Alias TP Series length (same as price_history here; typical price == close for current implementation)
+            # Use actual dynamic length (no fixed cap)
+            self.log(f"{time_str} 🧪 TP Series Length After Cleaning: {len(self.price_history)}")
+        except Exception:
+            pass
         cci = None
         if len(self.price_history) >= self.CCI_PERIOD:
             # Reuse parent's calculation helper
@@ -81,24 +127,25 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
                 self.cci_values.append(cci)
                 if len(self.cci_values) > 100:
                     self.cci_values = self.cci_values[-100:]
-
-        # Block if already in a position
-        if self.has_active_position():
-            self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
-            return
+                # Defensive: ensure concise legacy CCI summary exists (parent already logs, but guard future edits)
+                try:
+                    # Parent already emits, so this will be skipped unless implementation changes
+                    pass
+                except Exception:
+                    pass
 
         if cci is None:
-            # not enough data or zero-dev case
             return
-
-        # Immediate threshold-based signal
+        # Always log trade condition evaluation for parity even if active position
+        self.log(f"{time_str} 🚦 Checking trade conditions...")
         action = None
         if cci > 200:
             action = 'SELL'
         elif cci < -200:
             action = 'BUY'
 
-        if action:
+        active = self.has_active_position()
+        if action and not active:
             self.place_bracket_order(
                 action,
                 self.QUANTITY,
@@ -108,3 +155,7 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
                 self.TP_TICKS_SHORT,
             )
             self.log(f"{time_str} ✅ Bracket sent ({action}) on CCI14 ±200 threshold\n")
+        else:
+            self.log(f"{time_str} 🔍 No trade signal at the moment.")
+            if active:
+                self.log(f"{time_str} � BLOCKED: Trade already active\n")

@@ -79,7 +79,7 @@ class TestCCI14RevWarmup(unittest.TestCase):
         self.params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 
     def test_prerun_collects_history_and_bootstraps_ema(self):
-    algo = CCI14_120_TradingAlgorithm(contract_params=self.params, check_interval=0, initial_ema=100.0, ib=self.ib)
+        algo = CCI14_120_TradingAlgorithm(contract_params=self.params, check_interval=0, initial_ema=100.0, ib=self.ib)
         # Accelerate sleep
         self.ib.sleep = lambda *_a, **_k: None
         algo.pre_run()
@@ -98,12 +98,12 @@ class TestStartupTestOrder(unittest.TestCase):
         # Speed up sleep and ensure there is a valid price
         self.ib.sleep = lambda *_a, **_k: None
         # Run once
-        algo.perform_startup_test_order()
+        algo._perform_startup_test_order()
         # One order placed then cancelled (we don’t track cancellations in MockIB; assert last_order exists)
         self.assertIsNotNone(self.ib.last_order)
         # Calling again is a no-op
         last = self.ib.last_order
-        algo.perform_startup_test_order()
+        algo._perform_startup_test_order()
         self.assertIs(self.ib.last_order, last)
 
 

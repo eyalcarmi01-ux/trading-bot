@@ -34,7 +34,7 @@ class TestBracketTracking(unittest.TestCase):
         self.ib.qualifyContracts = MagicMock()
         self.ib.placeOrder = MagicMock()
         self.ib.orders = MagicMock(return_value=[])
-        self.algo.monitor_stop(self.ib.positions())
+        self.algo._monitor_stop(self.ib.positions())
         self.assertIsNone(self.algo._last_sl_id)
         self.assertIsNone(self.algo._last_tp_id)
         self.assertIsNone(self.algo._last_entry_id)
