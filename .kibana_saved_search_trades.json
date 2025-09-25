@@ -1,0 +1,37 @@
+[
+  {
+    "type": "search",
+    "id": "trades-discover-default",
+    "attributes": {
+      "title": "Trades Discover (Ordered)",
+      "columns": [
+        "timestamp",
+        "algo",
+        "contract.symbol",
+        "contract.expiry",
+        "contract.exchange",
+        "contract.currency",
+        "event",
+        "action",
+        "quantity",
+        "price",
+        "pnl",
+        "cci",
+        "emas.EMA10",
+        "emas.EMA20",
+        "emas.EMA32",
+        "emas.EMA50",
+        "emas.EMA100",
+        "emas.EMA200",
+        "reason"
+      ],
+      "sort": [["timestamp","desc"]],
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"trades\",\"query\":{\"language\":\"kuery\",\"query\":\"\"},\"filter\":[]}"
+      }
+    },
+    "references": [
+      {"type": "index-pattern", "name": "kibanaSavedObjectMeta.searchSourceJSON.index", "id": "trades"}
+    ]
+  }
+]

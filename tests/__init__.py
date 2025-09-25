@@ -19,6 +19,7 @@ ALLOWED_TEST_MODULES = [
 	'tests.test_fill_scanning',
 	'tests.test_lifecycle',
 	'tests.test_legacy_helpers',
+	'tests.test_es_logging',
 ]
 
 

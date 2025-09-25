@@ -27,6 +27,19 @@ def setup_logger():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+    # Add visual padding at startup (10 empty lines) to both console and file outputs,
+    # guarded so it only happens once per process.
+    if not getattr(logger, '_padded', False):
+        for h in (file_handler, console_handler):
+            try:
+                if hasattr(h, 'stream') and h.stream:
+                    h.stream.write('\n' * 10)
+                    h.flush()
+            except Exception:
+                # Best-effort padding; ignore any stream/IO issues
+                pass
+        setattr(logger, '_padded', True)
+
     return logger
 
 # הגדרה אחת בלבד לכל הפרויקט

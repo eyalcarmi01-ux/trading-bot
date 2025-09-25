@@ -88,16 +88,63 @@ def place_bracket_orders(cfg, ib, quantity, action):
     entry_order = MarketOrder(action, quantity)
     entry_order.transmit = False
     ib.placeOrder(cfg.contract, entry_order)
+    # Wait briefly for orderId assignment
+    for _ in range(20):
+        if getattr(entry_order, 'orderId', None) is not None:
+            break
+        ib.sleep(0.1)
+    entry_id = getattr(entry_order, 'orderId', None)
+    if entry_id is None:
+        logger.warning("❌ Entry orderId not assigned — cancelling entry to avoid naked order.")
+        try:
+            ib.cancelOrder(entry_order)
+        except Exception:
+            pass
+        return
 
     sl_order = StopOrder('SELL' if action == 'BUY' else 'BUY', quantity, sl)
     sl_order.transmit = False
-    sl_order.parentId = entry_order.orderId
-    ib.placeOrder(cfg.contract, sl_order)
+    sl_order.parentId = entry_id
+    try:
+        ib.placeOrder(cfg.contract, sl_order)
+    except Exception as e:
+        logger.warning(f"❌ Failed to place SL child: {e} — cancelling entry.")
+        try:
+            ib.cancelOrder(entry_order)
+        except Exception:
+            pass
+        return
 
     tp_order = LimitOrder('SELL' if action == 'BUY' else 'BUY', quantity, tp)
     tp_order.transmit = True
-    tp_order.parentId = entry_order.orderId
-    ib.placeOrder(cfg.contract, tp_order)
+    tp_order.parentId = entry_id
+    try:
+        ib.placeOrder(cfg.contract, tp_order)
+    except Exception as e:
+        logger.warning(f"❌ Failed to place TP child: {e} — cancelling entry & SL.")
+        try:
+            ib.cancelOrder(entry_order)
+            ib.cancelOrder(sl_order)
+        except Exception:
+            pass
+        return
+
+    # Verify children
+    children_ok = (
+        getattr(sl_order, 'orderId', None) is not None and
+        getattr(tp_order, 'orderId', None) is not None and
+        getattr(sl_order, 'parentId', None) == entry_id and
+        getattr(tp_order, 'parentId', None) == entry_id
+    )
+    if not children_ok:
+        logger.warning("❌ Bracket verification failed — cancelling all.")
+        try:
+            ib.cancelOrder(entry_order)
+            ib.cancelOrder(sl_order)
+            ib.cancelOrder(tp_order)
+        except Exception:
+            pass
+        return
 
     cfg.active_sl_order_id = sl_order.orderId
     cfg.active_tp_order_id = tp_order.orderId

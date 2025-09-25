@@ -1,11 +1,5 @@
 from algorithms.trading_algorithms_class import TradingAlgorithm
-import math
 import datetime
-# Order classes needed for legacy manual bracket placement
-try:
-	from ib_insync import MarketOrder, LimitOrder, StopOrder
-except Exception:  # pragma: no cover - fallback if ib_insync unavailable in some environments
-	MarketOrder = LimitOrder = StopOrder = None
 
 
 class FibonacciTradingAlgorithm(TradingAlgorithm):
@@ -23,7 +17,6 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 		self.last_high = None
 		self.last_low = None
 		self.last_signal = None
-		self.paused_notice_shown = False
 		# Order params
 		self.TICK_SIZE = 0.01
 		self.SL_TICKS = 17
@@ -51,11 +44,8 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 		self.last_stop_direction = None
 		# Feature flags (parity with legacy script):
 		#  - verbose_legacy_status: multi-line status block & separator each legacy tick
-		#  - manual_bracket_ids: manually assign bracket order ids (entry/sl/tp share parent)
-		#  - pending_order_detection: consider working transmitted orders as active (not only filled positions)
 		self.verbose_legacy_status = bool(use_prev_daily_candle)  # only for legacy mode
-		self.manual_bracket_ids = bool(use_prev_daily_candle)     # enable manual ids in legacy mode
-		self.pending_order_detection = bool(use_prev_daily_candle)
+
 
 	def pre_run(self):
 		"""Optional warm-up: fetch previous daily candle and hourly MA for legacy mode."""
@@ -72,6 +62,19 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 				whatToShow='TRADES',
 				useRTH=True
 			)
+			# Log concise summary
+			try:
+				count = len(bars_daily) if bars_daily is not None else 0
+				def _bar_desc(b):
+					date = getattr(b, 'date', None) or getattr(b, 'time', None)
+					close = getattr(b, 'close', None)
+					if date is not None:
+						return f"({date}, close={close})"
+					return f"(close={close})"
+				sample = ", ".join(_bar_desc(b) for b in list(bars_daily)[-2:]) if count else ""
+				self.log(f"🗄️ Fib daily history: duration=2 D | bars={count} | sample={sample}")
+			except Exception:
+				pass
 			if len(bars_daily) < 2:
 				self.log("⚠️ Not enough daily candles — legacy fib mode disabled")
 				self.use_prev_daily_candle = False
@@ -107,6 +110,19 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 					whatToShow='TRADES',
 					useRTH=True
 				)
+				# Log concise summary
+				try:
+					count = len(bars_hourly) if bars_hourly is not None else 0
+					def _bar_desc(b):
+						date = getattr(b, 'date', None) or getattr(b, 'time', None)
+						close = getattr(b, 'close', None)
+						if date is not None:
+							return f"({date}, close={close})"
+						return f"(close={close})"
+					sample = ", ".join(_bar_desc(b) for b in list(bars_hourly)[-3:]) if count else ""
+					self.log(f"🗄️ Fib hourly history: duration=120 H | bars={count} | sample={sample}")
+				except Exception:
+					pass
 			except Exception as e:
 				self.log(f"⚠️ Error fetching hourly candles: {e}")
 			if len(bars_hourly) < 120:
@@ -120,6 +136,19 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 						whatToShow='TRADES',
 						useRTH=True
 					)
+					# Log concise summary
+					try:
+						count = len(bars_hourly) if bars_hourly is not None else 0
+						def _bar_desc(b):
+							date = getattr(b, 'date', None) or getattr(b, 'time', None)
+							close = getattr(b, 'close', None)
+							if date is not None:
+								return f"({date}, close={close})"
+							return f"(close={close})"
+						sample = ", ".join(_bar_desc(b) for b in list(bars_hourly)[-3:]) if count else ""
+						self.log(f"🗄️ Fib hourly history (fallback): duration=3 D | bars={count} | sample={sample}")
+					except Exception:
+						pass
 				except Exception as e:
 					self.log(f"❌ Fallback request failed: {e}")
 			if len(bars_hourly) < 120:
@@ -154,11 +183,16 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 			return None, None
 
 	def on_tick(self, time_str):
-		price = self.get_valid_price()
-		if price is None:
-			self.log(f"{time_str} ⚠️ Invalid price — skipping")
+		ctx = self.tick_prologue(
+			time_str,
+			update_ema=False,
+			compute_cci=False,
+			price_annotator=None,
+			update_history=False,
+		)
+		if ctx is None:
 			return
-		self.log_price(time_str, price)
+		price = ctx["price"]
 
 		# Legacy mode: previous daily candle fib targeting and 120h MA context
 		if self.use_prev_daily_candle and self.fib_target is not None:
@@ -220,8 +254,8 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 						self.active_tp_price = None
 						return
 			# No active position — can we enter?
-			# Use extended pending order detection to mirror legacy "position or pending" gating
-			if entry_condition_met and not self.is_position_open_or_pending():
+			# Use base pending-aware gating: treat positions or working orders as active
+			if entry_condition_met and not self.has_active_position():
 				self.log(f"⚡ Price {price:.2f} meets {planned_action} condition at {fib_target:.2f}")
 				# Pre-compute TP/SL at decision time to mirror legacy logs
 				if planned_action == 'LONG':
@@ -229,45 +263,33 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 					self.active_tp_price, self.active_stop_price = tp, sl
 					self.active_direction = 'LONG'
 					self.trade_active = True
-					if self.manual_bracket_ids:
-						self.place_legacy_bracket_order('BUY', self.QUANTITY)
-					else:
-						self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+					self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				else:
 					tp, sl = self._compute_tp_sl('SELL', price)
 					self.active_tp_price, self.active_stop_price = tp, sl
 					self.active_direction = 'SHORT'
 					self.trade_active = True
-					if self.manual_bracket_ids:
-						self.place_legacy_bracket_order('SELL', self.QUANTITY)
-					else:
-						self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+					self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				return
 			# Reversal logic after SL
-			if self.last_stop_direction == 'LONG' and not self.is_position_open_or_pending():
+			if self.last_stop_direction == 'LONG' and not self.has_active_position():
 				if price >= self.fib_target:
 					self.log(f"🔄 Reversal: Entering SHORT after failed LONG at {self.fib_target:.2f}")
 					tp, sl = self._compute_tp_sl('SELL', price)
 					self.active_tp_price, self.active_stop_price = tp, sl
 					self.active_direction = 'SHORT'
 					self.trade_active = True
-					if self.manual_bracket_ids:
-						self.place_legacy_bracket_order('SELL', self.QUANTITY)
-					else:
-						self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+					self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 					self.last_stop_direction = None
 					return
-			if self.last_stop_direction == 'SHORT' and not self.is_position_open_or_pending():
+			if self.last_stop_direction == 'SHORT' and not self.has_active_position():
 				if price <= self.fib_target:
 					self.log(f"🔄 Reversal: Entering LONG after failed SHORT at {self.fib_target:.2f}")
 					tp, sl = self._compute_tp_sl('BUY', price)
 					self.active_tp_price, self.active_stop_price = tp, sl
 					self.active_direction = 'LONG'
 					self.trade_active = True
-					if self.manual_bracket_ids:
-						self.place_legacy_bracket_order('BUY', self.QUANTITY)
-					else:
-						self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+					self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 					self.last_stop_direction = None
 					return
 			# Status log (compact)
@@ -298,9 +320,6 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 			self.fib_retracements = [round(self.last_high - range_ * level, 4) for level in self.fib_levels]
 			self.log(f"{time_str} 🔢 Fib retracements: {self.fib_retracements}")
 		if self.has_active_position():
-			if self.current_sl_price is not None:
-				positions = self.ib.positions()
-				self.current_sl_price = self._monitor_stop(positions)
 			self._handle_active_position(time_str)
 			return
 		# Simple bounce/reject logic near fib level
@@ -334,97 +353,4 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 		self.trade_active = False
 		self.last_stop_direction = None
 
-	# === Legacy Parity Helpers ===
-	def is_position_open_or_pending(self):
-		"""Return True if there is an active position OR a working transmitted order (legacy parity)."""
-		if not getattr(self, 'pending_order_detection', False):
-			return self.has_active_position()
-		try:
-			# Active position check
-			if self.has_active_position():
-				return True
-			# Pending order scan
-			trades = []
-			try:
-				trades = self.ib.trades()
-			except Exception:
-				trades = []
-			for tr in trades:
-				try:
-					contract = getattr(tr, 'contract', None)
-					if contract is None or getattr(contract, 'conId', None) != getattr(self.contract, 'conId', None):
-						continue
-					order = getattr(tr, 'order', None)
-					status = getattr(tr, 'orderStatus', None)
-					if order is None or status is None:
-						continue
-					st = (getattr(status, 'status', '') or '').lower()
-					transmit_flag = getattr(order, 'transmit', True)
-					if transmit_flag and st not in ('filled', 'cancelled'):
-						return True
-				except Exception:
-					continue
-			return False
-		except Exception:
-			return self.has_active_position()
-
-	def place_legacy_bracket_order(self, action, quantity):
-		"""Manual bracket with explicit parent/child orderIds (legacy style)."""
-		try:
-			contract = self.contract
-			# Snapshot price similar to base implementation
-			tick = self.ib.reqMktData(contract, snapshot=True)
-			self.ib.sleep(1)
-			# Attempt to pick a valid price
-			ref_price = None
-			for field in ('last', 'close', 'ask', 'bid'):
-				val = getattr(tick, field, None)
-				if isinstance(val, (int, float)) and not (isinstance(val, float) and math.isnan(val)):
-					ref_price = val
-					break
-			if ref_price is None:
-				self.log("⚠️ No valid price — skipping order")
-				return
-			if action.upper() == 'BUY':
-				tp_price = round(ref_price + self.TICK_SIZE * self.TP_TICKS_LONG, 2)
-				sl_price = round(ref_price - self.TICK_SIZE * self.SL_TICKS, 2)
-				exit_action = 'SELL'
-			elif action.upper() == 'SELL':
-				tp_price = round(ref_price - self.TICK_SIZE * self.TP_TICKS_SHORT, 2)
-				sl_price = round(ref_price + self.TICK_SIZE * self.SL_TICKS, 2)
-				exit_action = 'BUY'
-			else:
-				self.log("⚠️ Invalid action")
-				return
-			self.log(f"📌 Entry ref price (legacy) : {ref_price}")
-			self.log(f"🎯 TP: {tp_price} | 🛡️ SL: {sl_price}")
-			self.current_sl_price = sl_price
-			# Manual id allocation (fallback to base if not available)
-			try:
-				entry_id = self.ib.client.getReqId()
-			except Exception:
-				entry_id = None
-			entry_order = MarketOrder(action, quantity)
-			entry_order.transmit = False
-			if entry_id is not None:
-				entry_order.orderId = entry_id
-			self.ib.placeOrder(contract, entry_order)
-			sl_order = StopOrder(exit_action, quantity, sl_price)
-			sl_order.transmit = False
-			sl_order.parentId = getattr(entry_order, 'orderId', None)
-			self.ib.placeOrder(contract, sl_order)
-			tp_order = LimitOrder(exit_action, quantity, tp_price)
-			tp_order.transmit = True
-			tp_order.parentId = getattr(entry_order, 'orderId', None)
-			self.ib.placeOrder(contract, tp_order)
-			self.log(f"✅ Bracket order sent for {contract.symbol} ({action}) [legacy ids]")
-			# Track like base for fill detection compatibility
-			self._last_entry_order = entry_order
-			self._last_sl_order = sl_order
-			self._last_tp_order = tp_order
-			self._last_entry_id = getattr(entry_order, 'orderId', None)
-			self._last_sl_id = getattr(sl_order, 'orderId', None)
-			self._last_tp_id = getattr(tp_order, 'orderId', None)
-		except Exception as e:
-			self.log(f"❌ Error in place_legacy_bracket_order: {e}")
-			return
+	# Note: Bracket placement is centralized in base class.

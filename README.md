@@ -1,3 +1,75 @@
+# Trading Bot
+
+Modernized Python trading strategies with a shared base engine, unified seeding/gating, rich logging/CSV export, and a focused unit test suite.
+
+## Quick start
+
+Requirements
+- Python 3.11+
+- ib-insync (see requirements.txt)
+
+Install deps
+
+```
+pip install -r requirements.txt
+```
+
+Run tests
+
+```
+python -m unittest -v
+```
+
+Run the demo launcher (multiple algos, staggered threads)
+
+```
+python main_class.py
+```
+
+Notes
+- Console output: By default only the CCI-200 algo prints to console; all algos log to files under `logs/`.
+- Override console selection (comma-separated class names): `CONSOLE_ALGOS=CCI14_200_TradingAlgorithm,EMATradingAlgorithm`
+- ES logging defaults (launcher): `TRADES_ES_ENABLED=1`, `TRADES_ES_INDEX=trades`, `TRADES_ES_SEED_INDEX=trades_seed`.
+  - If Elasticsearch is already reachable at `ES_URL` (default `http://localhost:9200`), Docker Compose is skipped.
+  - When composing locally, data persists across runs via the `esdata` named volume in `docker-compose.yml`.
+  - Sample trade seeding now happens only if the index is empty (idempotent). Use `python scripts/seed_trades_es.py --force trades` to reseed.
+
+## Centralized indicators and runtime behavior
+
+This project now centralizes common trading logic in the base class `TradingAlgorithm` (`algorithms/trading_algorithms_class.py`). All algorithms use these shared capabilities:
+
+- EMA updates: `update_emas(price)` updates single-EMA, fast/slow EMA, and multi-EMA spans as available on the algorithm instance. Diagnostics are logged uniformly.
+- CCI(14): `compute_and_log_cci(time_str)` delegates to the base calculator and stores values; `calculate_and_log_cci(prices, time_str)` performs the actual computation and emits concise logs.
+- Verbose price history: `update_price_history_verbose(...)` tracks saved prices and prints the recent series for visibility.
+- Trading window gating: `should_trade_now(now)` is the single source of truth for all algos. Trading ends at 23:00 per CCI-200 behavior, and this is applied project-wide.
+- Console logging allowlist: by default only the CCI‑200 algorithm logs to console; other strategies still write to their log files. Adjust the allowlist in the base class if you want to surface additional algos to stdout.
+
+### Shared per-tick prologue (tick_prologue)
+Use `TradingAlgorithm.tick_prologue(...)` to handle common per-tick work and return a small context dict.
+
+What it does
+- Enforces trading window and returns early when blocked
+- Fetches and logs the price (and writes CSV)
+- Optionally updates EMAs and logs diagnostics
+- Optionally updates price history and computes/logs CCI
+- Returns a dict: { "price": float|None, "cci": float|None }
+
+Typical usage in `on_tick`
+- `ctx = self.tick_prologue(time_str, update_ema=True, compute_cci=True, price_annotator=lambda: {"EMA10": self.ema_fast, "EMA200": self.ema_slow})`
+- If `ctx["price"]` is None: return
+- Proceed with strategy-specific logic using `ctx`
+
+Seeding and observability improvements:
+
+- Generic historical seeding pulls 500 one‑minute bars for all strategies and primes EMAs/CCI consistently.
+- All seeded history and calculated indicators are logged and also exported to CSV under `logs/` for offline inspection.
+- Startup seeding and any test order wiring no longer wait for a round minute.
+
+Testing notes:
+
+- Time-dependent tests should patch datetime in the base module (where `should_trade_now` and other helpers read the time) to avoid brittleness.
+- The unit test suite exercises all strategies against the centralized logic; use the provided VS Code task “Run all unittests”.
+
 # Trading Bot (algorithms + tests)
 
 Minimal refactor of trading algorithms with a focused test suite.
@@ -39,6 +111,12 @@ Key meanings:
 
 Legacy names (e.g. `CCI14TradingAlgorithm`, `CCI14ThresholdTradingAlgorithm`) were removed in favor of explicit variants (`CCI14_Compare_...`, `CCI14_200_...`) for clarity.
 
+### Console output selection (default: only CCI‑200)
+- By default, only `CCI14_200_TradingAlgorithm` prints to the console; all algorithms always write to their log files under `logs/`.
+- You can override which algos print by setting the environment variable `CONSOLE_ALGOS` to a comma-separated list of class names (e.g., `CCI14_200_TradingAlgorithm,EMATradingAlgorithm`).
+- Both method-call traces (CALL …) and regular instance log lines respect this filter. Non-listed algos will still log to files.
+- The launcher (`main_class.py`) applies this at startup by updating `TradingAlgorithm.CONSOLE_ALLOWED` and setting each instance’s `log_to_console` accordingly.
+
 ## Requirements
 - Python 3.11+
 - ib-insync (see requirements.txt)
@@ -67,7 +145,7 @@ Test discovery is intentionally scoped in `tests/__init__.py` to only run algori
 - Tests use lightweight mock IB objects to avoid network calls.
 - Only code in `algorithms/` (and the base class) is considered in scope here.
  - Lifecycle and logging behavior covered by `tests/test_lifecycle.py`.
- - Current curated suite: 76 tests (signal logic, lifecycle phases, bracket tracking, performance sanity, regression paths).
+ - Current curated suite: 78 tests (signal logic, lifecycle phases, bracket tracking, performance sanity, regression paths).
 
 ### Internal method naming (encapsulation refactor)
 Several lifecycle/housekeeping helpers were converted from public to internal (underscore) methods to clarify the supported public surface of `TradingAlgorithm`:
@@ -134,7 +212,7 @@ Tests were updated to reference the new internal names where direct invocation w
 ```
 
 Historical bootstrap (when connected live and not under test):
-- Fetches 1‑minute bars (`~2 D` lookback) to seed each EMA span once
+- Fetches 500 1‑minute bars (seconds-based duration) to seed history and prime indicators
 - Falls back silently if unavailable or in mock/test context
 
 Constructor flags:
@@ -175,6 +253,63 @@ Unit tests now assert numerical parity for both calculation modes (see `tests/te
 
 ## CI
 GitHub Actions workflow runs the same unittest command on every push/PR against `main`.
+
+## Elasticsearch + Kibana (optional)
+
+This repo includes a local Elasticsearch + Kibana stack via Docker Compose to index logs or analytical events.
+
+Setup
+- Install Docker Desktop (macOS)
+- Copy `.env.example` to `.env` and edit if needed (defaults work for local compose)
+- Start services:
+
+```
+docker compose up -d
+```
+
+Services
+- Elasticsearch: http://localhost:9200
+- Kibana: http://localhost:5601
+
+Python client
+- Install deps: `pip install -r requirements.txt` (includes `elasticsearch`)
+- Bootstrap an index and a sample doc:
+
+```
+python scripts/bootstrap_es.py trading-bot-logs
+```
+
+Minimal usage in code
+- Use `es_client.get_es_client()` to obtain a client.
+- Call `ensure_index` once, then `index_doc` or `bulk_index` for ingestion.
+
+Kibana Discover views with ordered columns
+- Create the Data Views and import the saved Discover searches (ordered columns) automatically:
+
+```
+python scripts/setup_kibana_saved_search.py
+```
+
+- Then open Kibana → Discover and select "Trades Discover (Ordered)" for the trades index. Columns are ordered as:
+  `timestamp, algo, symbol, contract.*, event, action, quantity, price, pnl, cci, emas.*, reason`.
+
+- For seeding/priming observability, select "Seed/Priming Discover (Ordered)" for the separate seed index. Columns are ordered as:
+  `timestamp, algo, symbol, contract.*, event, history, priming`.
+
+Security notes
+- The compose file runs Elasticsearch with security disabled for local use only. For a secured setup, enable xpack security, set credentials, and define `ES_USERNAME`/`ES_PASSWORD`.
+
+### Persistence and bind‑mount option
+- By default, `docker-compose.yml` uses a named volume `esdata` so indices persist across runs.
+- To store ES data under a host folder (easy backup/cleanup), set `ESDATA_PATH` in `.env`, e.g. `ESDATA_PATH=./.esdata`.
+  The compose file is wired to honor this env var.
+
+### Troubleshooting
+- Docker not installed or not running: the launcher skips bootstrap and continues. Set `TRADES_ES_ENABLED=0` to silence ES logging attempts.
+- ES already running locally (different compose or external): launcher detects and skips `docker compose up`.
+- Port in use (9200/5601): change ports in `docker-compose.yml` or stop the other services.
+- Re-seed sample docs: `python scripts/seed_trades_es.py --force trades` (default seeding only runs if the index is empty).
+- Disable bootstrap explicitly: run `python main_class.py --no-bootstrap-es` or set `BOOTSTRAP_ES=0`.
 
 ## Coverage
 Install dev dependency (already listed in requirements):

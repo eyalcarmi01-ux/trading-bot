@@ -31,7 +31,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
         for p in prices:
             self.algo.price_history.append(p)
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_should_trade_now_inside_window(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 9, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime
@@ -39,7 +39,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
         mock_dt.timedelta = datetime.timedelta
         self.assertTrue(self.algo.should_trade_now())
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_should_trade_now_outside_window(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 7, 59, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime
@@ -47,7 +47,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
         mock_dt.timedelta = datetime.timedelta
         self.assertFalse(self.algo.should_trade_now())
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_threshold_sell_triggers_bracket(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime
@@ -60,7 +60,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
         self.assertGreaterEqual(len(self.ib.orders()), 3)
         self.assertIsNotNone(self.ib.last_order)
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_threshold_buy_triggers_bracket(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime
@@ -71,7 +71,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
             self.algo.on_tick('12:00:00')
         self.assertGreaterEqual(len(self.ib.orders()), 3)
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_no_trade_when_outside_window(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 7, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime
@@ -82,7 +82,7 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
             self.algo.on_tick('07:00:00')
         self.assertEqual(len(self.ib.orders()), 0)
 
-    @patch('algorithms.cci14_200_trading_algorithm.datetime')
+    @patch('algorithms.trading_algorithms_class.datetime')
     def test_block_when_active_position(self, mock_dt):
         mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
         mock_dt.datetime.strftime = datetime.datetime.strftime

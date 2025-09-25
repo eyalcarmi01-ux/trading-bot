@@ -1,0 +1,27 @@
+[
+  {
+    "type": "search",
+    "id": "trades-seed-discover-default",
+    "attributes": {
+      "title": "Seed/Priming Discover (Ordered)",
+      "columns": [
+        "timestamp",
+        "algo",
+        "contract.symbol",
+        "contract.expiry",
+        "contract.exchange",
+        "contract.currency",
+        "event",
+        "history",
+        "priming"
+      ],
+      "sort": [["timestamp","desc"]],
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"trades_seed\",\"query\":{\"language\":\"kuery\",\"query\":\"\"},\"filter\":[]}"
+      }
+    },
+    "references": [
+      {"type": "index-pattern", "name": "kibanaSavedObjectMeta.searchSourceJSON.index", "id": "trades_seed"}
+    ]
+  }
+]

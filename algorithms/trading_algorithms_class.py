@@ -1,5 +1,7 @@
 from ib_insync import *
-import datetime, time, math, functools, types, os, threading, atexit, re, asyncio, signal, random
+import datetime, time, math, functools, types, os, threading, atexit, asyncio
+import traceback
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 class MethodLoggingMeta(type):
@@ -13,15 +15,42 @@ class MethodLoggingMeta(type):
 					# Prefer the standardized logger if present
 					logger = getattr(self, 'log', None)
 					msg = f"CALL {type(self).__name__}.{fn.__name__}()"
-					if callable(logger) and fn.__name__ != 'log':
-						logger(msg)
+					if callable(logger) and fn.__name__ != 'log' and getattr(self, 'log_method_calls', False):
+						# Gate console printing to allowed classes for CALL traces while still writing to file logs
+						try:
+							_allowed = getattr(TradingAlgorithm, 'CONSOLE_ALLOWED', None)
+						except Exception:
+							_allowed = None
+						cls_name = type(self).__name__
+						if _allowed is None or cls_name in _allowed:
+							logger(msg)
+						else:
+							# Temporarily disable console for this log line
+							try:
+								_orig = getattr(self, 'log_to_console', True)
+								setattr(self, 'log_to_console', False)
+								logger(msg)
+							finally:
+								try:
+									setattr(self, 'log_to_console', _orig)
+								except Exception:
+									pass
 					else:
 						# Fallback print with timestamp (no client id accessible yet here reliably)
 						try:
 							_ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 						except Exception:
 							_ts = '0000-00-00 00:00:00'
-						print(f"[{type(self).__name__}][clientId=?] {_ts} {msg}")
+						# Respect per-instance console preference when logger() isn't available
+						try:
+							_allowed = getattr(TradingAlgorithm, 'CONSOLE_ALLOWED', None)
+							cls_name = type(self).__name__
+							if (_allowed is None or cls_name in _allowed) and getattr(self, 'log_to_console', True) and getattr(self, 'log_method_calls', False):
+								print(f"[{cls_name}][clientId=?] {_ts} {msg}")
+						except Exception:
+							# Best-effort fallback
+							if getattr(self, 'log_method_calls', False):
+								print(f"[{type(self).__name__}][clientId=?] {_ts} {msg}")
 				except Exception:
 					pass
 				return fn(self, *args, **kwargs)
@@ -35,11 +64,15 @@ class MethodLoggingMeta(type):
 			@functools.wraps(fn)
 			def _wrapped(cls, *args, **kwargs):
 				try:
+					if not getattr(cls, 'log_method_calls', False):
+						return fn(cls, *args, **kwargs)
 					try:
 						_ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 					except Exception:
 						_ts = '0000-00-00 00:00:00'
-					print(f"[{cls.__name__}][clientId=?] {_ts} CALL {cls.__name__}.{fn.__name__}()")
+					_allowed = getattr(cls, 'CONSOLE_ALLOWED', None)
+					if _allowed is None or cls.__name__ in _allowed:
+						print(f"[{cls.__name__}][clientId=?] {_ts} CALL {cls.__name__}.{fn.__name__}()")
 				except Exception:
 					pass
 				return fn(cls, *args, **kwargs)
@@ -53,11 +86,19 @@ class MethodLoggingMeta(type):
 			@functools.wraps(fn)
 			def _wrapped(*args, **kwargs):
 				try:
+					# For staticmethods, use global flag from TradingAlgorithm
+					if not getattr(TradingAlgorithm, 'log_method_calls', False):
+						return fn(*args, **kwargs)
 					try:
 						_ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 					except Exception:
 						_ts = '0000-00-00 00:00:00'
-					print(f"[{owner_name}][clientId=?] {_ts} CALL {owner_name}.{fn.__name__}()")
+					try:
+						_allowed = getattr(TradingAlgorithm, 'CONSOLE_ALLOWED', None)
+					except Exception:
+						_allowed = None
+					if _allowed is None or owner_name in _allowed:
+						print(f"[{owner_name}][clientId=?] {_ts} CALL {owner_name}.{fn.__name__}()")
 				except Exception:
 					pass
 				return fn(*args, **kwargs)
@@ -79,16 +120,16 @@ class MethodLoggingMeta(type):
 
 
 class TradingAlgorithm(metaclass=MethodLoggingMeta):
+	log_method_calls = False
+	# Allowed algorithm class names to print to console for metaclass traces.
+	# None means allow all. Default restricts to the CCI-200 algo.
+	CONSOLE_ALLOWED = { 'CCI14_200_TradingAlgorithm' }
 	# Class-level counter for synthetic client ids when using injected mock IB objects
 	_mock_id_counter = 8000
 	# Shared log file registry: log_tag -> {fp, lock}
 	_shared_logs = {}
-	# Active client id registry to enforce uniqueness (requirement #5)
-	_active_client_ids = set()
-	_active_ids_lock = threading.Lock()
-	# Track recent failed clientIds to avoid immediate reuse that can trigger stale sessions
-	_failed_client_history = {}  # clientId -> last failure epoch seconds
-	_client_reuse_cooldown = 10  # seconds to wait before reusing a just-failed id
+	# One-time process-wide console padding guard
+	_console_padded_once = False
 	def log(self, msg: str):
 		"""Standardized logging with subclass/clientId prefix and wall-clock timestamp (YYYY-MM-DD HH:MM:SS)."""
 		log_tag = getattr(self, '_log_tag', type(self).__name__)
@@ -108,6 +149,24 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		if getattr(self, 'log_to_console', True):
 			print(line)
 
+	def log_exception(self, exc: Exception, context: Optional[str] = None):
+		"""Log an exception with traceback to the per-algorithm log and console.
+
+		Args:
+			exc: The caught exception.
+			context: Optional prefix (e.g., time_str) to include before the header.
+		"""
+		try:
+			header_prefix = (context + ' ') if context else ''
+			self.log(f"{header_prefix}❌ Exception: {exc}")
+			# Format and emit traceback lines indented for readability
+			tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+			for line in tb.rstrip().splitlines():
+				self.log(f"    {line}")
+		except Exception:
+			# Best-effort; avoid cascading failures during error reporting
+			pass
+
 	def _pick_price(self, tick):
 		"""Return (field_name, value) for the first valid price in priority order."""
 		for field in ('last', 'close', 'ask', 'bid'):
@@ -125,6 +184,204 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		for key, value in kwargs.items():
 			msg += f" | {key}: {value}"
 		self.log(msg)
+
+	# ===== Unified helpers to standardize behavior across all algorithms =====
+	def gate_trading_window_or_skip(self, time_str: str) -> bool:
+		"""Return True if inside trading window; otherwise log a standardized skip line and return False."""
+		try:
+			if not self.should_trade_now():
+				self.log(f"{time_str} ⏸️ Outside trading window — skipping")
+				return False
+		except Exception:
+			# On any evaluation failure, do not block
+			return True
+		return True
+
+	def log_market_price_saved(self, time_str: str, price: float):
+		"""Emit the common market price visibility lines, including minute-aligned 'saved' line."""
+		try:
+			self.log(f"{time_str} 💰 Market Price: {price:.2f}")
+			try:
+				_now = self._now_in_tz()
+				minute_aligned = _now.replace(second=0, microsecond=0)
+			except Exception:
+				minute_aligned = datetime.datetime.now().replace(second=0, microsecond=0)
+			self.log(f"{time_str} 📈 Market price saved for {minute_aligned.strftime('%Y-%m-%d %H:%M:%S')}: {price:.2f}")
+		except Exception:
+			pass
+
+	def update_price_history_verbose(self, time_str: str, price: float, *, maxlen: int = 500):
+		"""Append price to price_history and emit verbose diagnostics consistent with CCI-200."""
+		prev_len = len(self.price_history) if hasattr(self, 'price_history') else 0
+		self.update_price_history(price, maxlen=maxlen)
+		try:
+			if len(self.price_history) > prev_len:
+				self.log(f"{time_str} 📊 Updated close_series with price: {price:.2f} | Length: {len(self.price_history)}")
+				self.log(f"{time_str} 📥 New TP added: {price:.2f}")
+			# Additional maintenance/info lines
+			self.log(f"{time_str} 📊 Updated price_history length: {len(self.price_history)}")
+			recent_tp = ", ".join(f"{p:.2f}" for p in self.price_history[-10:])
+			self.log(f"{time_str} 🧪 Recent TP Values: {recent_tp}")
+			self.log(f"{time_str} 🧼 Cleaned price series length: {len(self.price_history)}")
+			self.log(f"{time_str} 🧪 TP Series Length After Cleaning: {len(self.price_history)}")
+		except Exception:
+			pass
+
+	def update_emas(self, price: float):
+		"""Centralized EMA updates.
+
+		- If multi_ema_spans configured, update self._multi_emas and short histories, and sync ema_fast/ema_slow (once).
+		- Else, if EMA_FAST_PERIOD/EMA_SLOW_PERIOD present, update ema_fast/ema_slow.
+		- If EMA_PERIOD and live_ema present (EMA strategy), update live_ema.
+		"""
+		# Multi-span EMAs (preferred unified path)
+		used_multi = False
+		try:
+			spans = getattr(self, 'multi_ema_spans', None)
+			if spans and isinstance(spans, (list, tuple, set)):
+				used_multi = True
+				if not hasattr(self, '_multi_emas') or self._multi_emas is None:
+					self._multi_emas = {}
+				# Precompute k per span
+				_k = {}
+				for span in spans:
+					try:
+						_k[span] = 2/(int(span)+1)
+					except Exception:
+						continue
+				for span in spans:
+					k = _k.get(span)
+					if k is None:
+						continue
+					prev = self._multi_emas.get(span)
+					self._multi_emas[span] = price if prev is None else round(price*k + prev*(1-k), 4)
+					# Maintain small history buffers if present
+					try:
+						if hasattr(self, '_multi_ema_histories') and span in self._multi_ema_histories:
+							self._multi_ema_histories[span].append(self._multi_emas[span])
+					except Exception:
+						pass
+				# Sync primary fast/slow from multi once
+				try:
+					if isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int):
+						self.ema_fast = self._multi_emas.get(self.EMA_FAST_PERIOD, getattr(self, 'ema_fast', None))
+					if isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int):
+						self.ema_slow = self._multi_emas.get(self.EMA_SLOW_PERIOD, getattr(self, 'ema_slow', None))
+				except Exception:
+					pass
+		except Exception:
+			pass
+		# Fallback: Fast/Slow pair if multi-EMA not configured
+		if not used_multi:
+			try:
+				if isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int):
+					k = 2/(self.EMA_FAST_PERIOD+1)
+					self.ema_fast = self.calculate_ema(price, getattr(self, 'ema_fast', None), k)
+				if isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int):
+					k = 2/(self.EMA_SLOW_PERIOD+1)
+					self.ema_slow = self.calculate_ema(price, getattr(self, 'ema_slow', None), k)
+			except Exception:
+				pass
+		# Single EMA strategy support (EMA_PERIOD/live_ema)
+		try:
+			if isinstance(getattr(self, 'EMA_PERIOD', None), int) and hasattr(self, 'live_ema'):
+				k = 2/(self.EMA_PERIOD+1)
+				self.live_ema = self.calculate_ema(price, getattr(self, 'live_ema', None), k)
+		except Exception:
+			pass
+
+	def maybe_log_extra_ema_diag(self, time_str: str):
+		"""Log a standardized extra EMAs diagnostics line for any available EMAs."""
+		parts = []
+		try:
+			multi = getattr(self, '_multi_emas', None)
+			spans = None
+			if isinstance(multi, dict) and multi:
+				spans = sorted(multi.keys())
+				for span in spans:
+					val = multi.get(span)
+					if isinstance(val, (int, float)):
+						parts.append(f"EMA{span}={val:.2f}")
+					else:
+						parts.append(f"EMA{span}=N/A")
+			# Fallbacks if no multi set
+			if not parts:
+				if hasattr(self, 'ema_fast') and isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int):
+					parts.append(f"EMA{self.EMA_FAST_PERIOD}={getattr(self, 'ema_fast', None)}")
+				if hasattr(self, 'ema_slow') and isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int):
+					parts.append(f"EMA{self.EMA_SLOW_PERIOD}={getattr(self, 'ema_slow', None)}")
+				if isinstance(getattr(self, 'EMA_PERIOD', None), int) and hasattr(self, 'live_ema'):
+					parts.append(f"EMA{self.EMA_PERIOD}={getattr(self, 'live_ema', None)}")
+			if parts:
+				self.log(f"{time_str} 🧪 EMAS: " + " | ".join(str(p) for p in parts))
+		except Exception:
+			pass
+
+	def compute_and_log_cci(self, time_str: str):
+		"""Compute CCI using the base calculator; append to cci_values and return it."""
+		cci = None
+		try:
+			prices = getattr(self, 'price_history', []) or []
+			period = getattr(self, 'CCI_PERIOD', 14)
+			if len(prices) >= period:
+				cci = self.calculate_and_log_cci(prices, time_str)
+				if cci is not None:
+					if not hasattr(self, 'cci_values') or self.cci_values is None:
+						self.cci_values = []
+					self.cci_values.append(cci)
+					if len(self.cci_values) > 100:
+						self.cci_values = self.cci_values[-100:]
+					self.prev_cci = cci
+		except Exception:
+			pass
+		return cci
+
+	def calculate_and_log_cci(self, prices, time_str: str):
+		"""Base implementation of CCI(14) calculator with optional classic mode.
+
+		- Uses self.CCI_PERIOD if present (default 14)
+		- When self.classic_cci_mode is True, uses mean deviation; otherwise sample stdev
+		- Logs a standardized diagnostics line
+		"""
+		try:
+			period = int(getattr(self, 'CCI_PERIOD', 14))
+			if len(prices) < period:
+				self.log(f"{time_str} ⚠️ Not enough data for CCI")
+				return None
+			from statistics import mean, stdev
+			window = prices[-period:]
+			avg_tp = mean(window)
+			classic_mode = bool(getattr(self, 'classic_cci_mode', False))
+			if classic_mode:
+				# Classic mean deviation variant
+				mean_dev = sum(abs(p - avg_tp) for p in window) / period
+				cci = 0 if mean_dev == 0 else (window[-1] - avg_tp) / (0.015 * mean_dev)
+				dev_display = mean_dev
+				dev_label = 'MeanDev'
+			else:
+				# Sample standard deviation variant
+				dev = stdev(window)
+				cci = 0 if dev == 0 else (window[-1] - avg_tp) / (0.015 * dev)
+				dev_display = dev
+				dev_label = 'StdDev'
+			arrow = "🔼" if getattr(self, 'prev_cci', None) is not None and cci > getattr(self, 'prev_cci') else ("🔽" if getattr(self, 'prev_cci', None) is not None and cci < getattr(self, 'prev_cci') else "⏸️")
+			mode = 'classic' if classic_mode else 'stdev'
+			self.log(f"{time_str} 📊 CCI14({mode}): {round(cci,2)} | Prev: {round(getattr(self, 'prev_cci'),2) if getattr(self, 'prev_cci', None) is not None else '—'} {arrow} | Mean: {round(avg_tp,2)} | {dev_label}: {round(dev_display,2)}")
+			# Concise parity line
+			try:
+				self.log(f"{time_str} 📊 CCI: {round(cci,2)} | Mean TP: {round(avg_tp,2)} | Dev: {round(dev_display,2)} | Arrow: {arrow}")
+			except Exception:
+				pass
+			return cci
+		except Exception:
+			return None
+
+	def log_checking_trade_conditions(self, time_str: str):
+		"""Standard line before strategy-specific decision checks."""
+		try:
+			self.log(f"{time_str} 🚦 Checking trade conditions...")
+		except Exception:
+			pass
 	def get_valid_price(self):
 		"""Fetch a current price prioritizing a persistent streaming subscription.
 		Strategy:
@@ -171,6 +428,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 					if source is not None:
 						break
 					self.ib.sleep(0.25)
+			snapshot_failed = False
 			if source is None:
 				# 3. Fallback snapshot
 				try:
@@ -181,10 +439,32 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 						self.log("🩹 Price obtained via snapshot fallback")
 				except Exception as e:
 					self.log(f"⚠️ Snapshot fallback error: {e}")
+					snapshot_failed = True
+					# If both streaming and snapshot retrieval failed due to exceptions, bail fast
+					if self._md_tick is None:
+						return None
 			if source is None:
 				# 4. Historical fallback (1 bar)
 				try:
-					bars = self.ib.reqHistoricalData(self.contract, endDateTime='', durationStr='1 D', barSizeSetting='1 min', whatToShow='TRADES', useRTH=False, formatDate=1, keepUpToDate=False)
+					duration = '1 D'
+					bars = self.ib.reqHistoricalData(self.contract, endDateTime='', durationStr=duration, barSizeSetting='1 min', whatToShow='TRADES', useRTH=False, keepUpToDate=False)
+					# Log concise summary of fallback history
+					try:
+						count = len(bars) if bars is not None else 0
+						def _bar_desc(b):
+							# Prefer timestamp under 'date' or 'time' if provided by ib_insync BarData
+							date = getattr(b, 'date', None) or getattr(b, 'time', None)
+							o = getattr(b, 'open', None)
+							h = getattr(b, 'high', None)
+							l = getattr(b, 'low', None)
+							c = getattr(b, 'close', None)
+							if date is not None:
+								return f"({date}, O={o}, H={h}, L={l}, C={c})"
+							return f"(O={o}, H={h}, L={l}, C={c})"
+						sample = ", ".join(_bar_desc(b) for b in list(bars)[-3:]) if count else ""
+						self.log(f"🗄️ Fallback history: duration={duration} | bars={count} | sample={sample}")
+					except Exception:
+						pass
 					if bars:
 						price = bars[-1].close
 						source = 'hist_close'
@@ -203,23 +483,59 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def update_price_history(self, price, maxlen=500):
 		if not hasattr(self, 'price_history'):
 			self.price_history = []
+		# Prime prev_market_price from existing history before appending (legacy-parity helper)
+		try:
+			if self.price_history:
+				self.prev_market_price = self.price_history[-1]
+		except Exception:
+			pass
 		self.price_history.append(price)
 		if len(self.price_history) > maxlen:
 			self.price_history = self.price_history[-maxlen:]
 
 	def has_active_position(self):
-		positions = self.ib.positions()
+		"""Return True if there is an active position OR a working transmitted order for this contract.
+		This blocks sending a new bracket while the previous one is still working (global pending-aware gating).
+		"""
 		algo_conid = getattr(self.contract, 'conId', None)
-		found = False
-		for p in positions:
-			pos_conid = getattr(getattr(p, 'contract', None), 'conId', None)
-			pos_size = getattr(p, 'position', 0)
-			#self.log(f"🔍 has_active_position check: algo_conId={algo_conid} vs pos_conId={pos_conid} size={pos_size}")
-			if pos_conid == algo_conid and abs(pos_size) > 0:
-				found = True
-				self.log(f"🔍 has_active_position: algo_conId={algo_conid} vs pos_conId={pos_conid} size={pos_size}")
-				break
-		return found
+		# 1) Concrete positions on the account
+		try:
+			positions = self.ib.positions()
+			for p in positions:
+				pos_conid = getattr(getattr(p, 'contract', None), 'conId', None)
+				pos_size = getattr(p, 'position', 0)
+				self.log(f"🔍 has_active_position check: algo_conId={algo_conid} vs pos_conId={pos_conid} size={pos_size}")
+				if pos_conid == algo_conid and abs(pos_size) > 0:
+					return True
+		except Exception:
+			# Fall through to pending-scan
+			pass
+		# 2) Pending/working orders (transmitted, not filled/cancelled)
+		try:
+			trades = []
+			try:
+				trades = self.ib.trades()
+			except Exception:
+				trades = []
+			for tr in trades:
+				try:
+					contract = getattr(tr, 'contract', None)
+					if contract is None or getattr(contract, 'conId', None) != algo_conid:
+						continue
+					order = getattr(tr, 'order', None)
+					status = getattr(tr, 'orderStatus', None)
+					if order is None or status is None:
+						continue
+					st = (getattr(status, 'status', '') or '').lower()
+					transmit_flag = getattr(order, 'transmit', True)
+					if transmit_flag and st not in ('filled', 'cancelled'):
+						self.log(f"🔍 Pending working order detected (status={st}) for conId={algo_conid} — treating as active")
+						return True
+				except Exception:
+					continue
+		except Exception:
+			pass
+		return False
 
 	def _handle_active_position(self, time_str):
 		self.log(f"{time_str} 🔒 Position active — monitoring only")
@@ -234,7 +550,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		except Exception:
 			pass
 		return
-	def __init__(self, contract_params, *, client_id=None, ib_host='127.0.0.1', ib_port=7497, ib=None, log_name: str = None, test_order_enabled: bool = False, test_order_action: str = 'BUY', test_order_qty: int = 1, test_order_fraction: float = 0.5, test_order_delay_sec: int = 5, test_order_reference_price: float = None, trade_timezone: str = 'Asia/Jerusalem', pause_before_hour: int = 8, new_order_cutoff: tuple = (22, 30), shutdown_at: tuple = (22, 50), force_close: tuple = None, connection_attempts: int = 5, connection_retry_delay: int = 2, connection_timeout: int = 5, defer_connection: bool = False):
+	def __init__(self, contract_params, *, client_id=None, ib_host='127.0.0.1', ib_port=7497, ib=None, log_name: str = None, test_order_enabled: bool = False, test_order_action: str = 'BUY', test_order_qty: int = 1, test_order_fraction: float = 0.5, test_order_delay_sec: int = 5, test_order_reference_price: float = None, trade_timezone: str = 'Asia/Jerusalem', pause_before_hour: int = 8, new_order_cutoff: tuple = (22, 30), shutdown_at: tuple = (22, 50), force_close: tuple = None, connection_attempts: int = 5, connection_retry_delay: int = 2, connection_timeout: int = 5, defer_connection: bool = False, auto_seed_enabled: bool = True, auto_seed_bars: int = 500, auto_seed_minutes: int = 500):
 		# High-level orchestrated initialization. Each helper is side-effectful on self.
 		self._validate_contract_params(contract_params)
 		self._prepare_client_id(ib, client_id)
@@ -246,7 +562,23 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		self._init_test_order_config(test_order_enabled, test_order_action, test_order_qty, test_order_fraction, test_order_delay_sec, test_order_reference_price)
 		self._init_contract(contract_params, ib)
 		self._init_trade_state()
-		self._register_disconnect_atexit()
+		# Default multi-EMA spans to compute for all algorithms
+		try:
+			if not hasattr(self, 'multi_ema_spans') or not self.multi_ema_spans:
+				self.multi_ema_spans = (10, 20, 32, 50, 100, 200)
+		except Exception:
+			self.multi_ema_spans = (10, 20, 32, 50, 100, 200)
+		# Generic seeding configuration (applies to all algorithms uniformly)
+		self._auto_seed_enabled = bool(auto_seed_enabled)
+		# Number of 1-min bars desired; used when minutes is not provided explicitly
+		self._auto_seed_bars = int(auto_seed_bars) if isinstance(auto_seed_bars, int) and auto_seed_bars > 0 else 500
+		# Minutes window for 1-min bars. Defaults to same as bars if invalid
+		try:
+			self._auto_seed_minutes = int(auto_seed_minutes)
+			if self._auto_seed_minutes <= 0:
+				raise ValueError
+		except Exception:
+			self._auto_seed_minutes = self._auto_seed_bars
 
 	def _configure_force_close(self, force_close):
 		"""Configure optional daily force-close time (hour, minute) or disable if None.
@@ -314,23 +646,17 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		if ib is not None and client_id is None:
 			TradingAlgorithm._mock_id_counter += 1
 			client_id = TradingAlgorithm._mock_id_counter
-		# Enforce uniqueness among active instances
-		with TradingAlgorithm._active_ids_lock:
-			if client_id is not None and client_id in TradingAlgorithm._active_client_ids:
-				# Pick an alternate high-range id not currently in use
-				alt = client_id
-				import random as _r
-				for _ in range(50):
-					alt = _r.randint(100, 899)
-					if alt not in TradingAlgorithm._active_client_ids:
-						break
-				client_id = alt
-			TradingAlgorithm._active_client_ids.add(client_id)
 		self.requested_client_id = client_id
 		self.client_id = client_id
 
 	def _setup_logging(self, log_name):
-		self.log_to_console = True
+		# Default console behavior: only allow classes in CONSOLE_ALLOWED to print during init
+		try:
+			_allowed = getattr(TradingAlgorithm, 'CONSOLE_ALLOWED', None)
+			cls_name = type(self).__name__
+			self.log_to_console = (True if (_allowed is None) else (cls_name in _allowed))
+		except Exception:
+			self.log_to_console = True
 		self._log_lock = threading.Lock()
 		try:
 			base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -355,6 +681,13 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				except Exception:
 					self._log_fp = None
 				TradingAlgorithm._shared_logs[self._log_tag] = {'fp': self._log_fp, 'lock': lock}
+				# Write file padding once per log tag for readability (10 blank lines)
+				try:
+					if self._log_fp is not None:
+						self._log_fp.write("\n" * 10)
+						self._log_fp.flush()
+				except Exception:
+					pass
 				if self._log_fp is not None:
 					def _close_shared(tag=self._log_tag):
 						try:
@@ -378,6 +711,24 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				pass
 		if self._log_fp is not None:
 			atexit.register(_close_fp, self._log_fp)
+
+		# Console padding once per process: print 10 blank lines at startup
+		try:
+			if not TradingAlgorithm._console_padded_once:
+				print("\n" * 10, end="")
+				TradingAlgorithm._console_padded_once = True
+		except Exception:
+			pass
+
+		# Prepare CSV export paths (reuse logs directory)
+		try:
+			self._seed_csv_path = os.path.join(self.log_dir, f"{self._log_tag}_seed_closes.csv")
+			self._priming_csv_path = os.path.join(self.log_dir, f"{self._log_tag}_priming_closes.csv")
+			self._indicators_csv_path = os.path.join(self.log_dir, f"{self._log_tag}_indicators.csv")
+		except Exception:
+			self._seed_csv_path = None
+			self._priming_csv_path = None
+			self._indicators_csv_path = None
 
 	def _init_connection_config(self, ib_host, ib_port, connection_attempts, retry_delay, timeout, defer_connection):
 		self._ib_host = ib_host
@@ -458,6 +809,356 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		self.trade_phase = 'IDLE'
 		self.current_direction = None
 		self._last_phase_change = datetime.datetime.now()
+		# Track entry/exit context for PnL and ES logging
+		self.entry_ref_price = None
+		self.entry_action = None
+		self.entry_qty_sign = None  # +1 for BUY, -1 for SELL
+		self.current_tp_price = None
+		# Optional Elasticsearch integration (off by default)
+		try:
+			self._es_enabled = bool(int(os.getenv('TRADES_ES_ENABLED', '0')))
+			# Separate indices for trades vs seed/priming for clarity
+			self._es_trades_index = os.getenv('TRADES_ES_INDEX', 'trades')
+			self._es_seed_index = os.getenv('TRADES_ES_SEED_INDEX', 'trades_seed')
+			self._es_client = None
+			self._es_warned = False  # one-time warning toggle for ES issues
+		except Exception:
+			self._es_enabled = False
+			self._es_trades_index = 'trades'
+			self._es_seed_index = 'trades_seed'
+			self._es_client = None
+			self._es_warned = False
+
+	def _es_prepare_trades(self):
+		"""Ensure ES client and the trades index with a minimal mapping."""
+		if not getattr(self, '_es_enabled', False):
+			# One-time note if ES logging is disabled
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log("ℹ️ ES trade logging disabled (set TRADES_ES_ENABLED=1 to enable)")
+				except Exception:
+					pass
+				self._es_warned = True
+			return False
+		try:
+			if self._es_client is None:
+				import es_client as _es
+				self._es_client = _es.get_es_client()
+				if self._es_client is None:
+					if not getattr(self, '_es_warned', False):
+						try:
+							self.log("⚠️ ES client unavailable — install elasticsearch>=8 and ensure ES_URL (default http://localhost:9200)")
+						except Exception:
+							pass
+						self._es_warned = True
+					return False
+			# Ensure trades index exists with a minimal mapping
+			import es_client as _es
+			_es.ensure_index(self._es_client, self._es_trades_index, mappings={
+					"properties": {
+						"timestamp": {"type": "date"},
+						"algo": {"type": "keyword"},
+						"action": {"type": "keyword"},
+						"entry_action": {"type": "keyword"},
+						"exit_action": {"type": "keyword"},
+						"quantity": {"type": "integer"},
+						"price": {"type": "double"},
+						"event": {"type": "keyword"},
+						"reason": {"type": "keyword"},
+						"pnl": {"type": "double"},
+						"emas": {"type": "object", "enabled": True},
+						"cci": {"type": "double"},
+						"contract": {
+							"type": "object",
+							"properties": {
+								"symbol": {"type": "keyword"},
+								"expiry": {"type": "keyword"},
+								"exchange": {"type": "keyword"},
+								"currency": {"type": "keyword"},
+								"localSymbol": {"type": "keyword"},
+								"secType": {"type": "keyword"},
+								"multiplier": {"type": "keyword"},
+								"tradingClass": {"type": "keyword"},
+								"conId": {"type": "long"}
+							}
+						}
+					}
+				})
+			return True
+		except Exception as e:
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log(f"⚠️ ES prepare failed — {e}")
+				except Exception:
+					pass
+				self._es_warned = True
+			return False
+
+	def _es_prepare_seed(self):
+		"""Ensure ES client and the seed/priming index with a mapping for history/priming payloads."""
+		if not getattr(self, '_es_enabled', False):
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log("ℹ️ ES logging disabled (set TRADES_ES_ENABLED=1 to enable)")
+				except Exception:
+					pass
+				self._es_warned = True
+			return False
+		try:
+			if self._es_client is None:
+				import es_client as _es
+				self._es_client = _es.get_es_client()
+				if self._es_client is None:
+					if not getattr(self, '_es_warned', False):
+						try:
+							self.log("⚠️ ES client unavailable — install elasticsearch>=8 and ensure ES_URL (default http://localhost:9200)")
+						except Exception:
+							pass
+						self._es_warned = True
+					return False
+			import es_client as _es
+			_es.ensure_index(self._es_client, self._es_seed_index, mappings={
+				"properties": {
+					"timestamp": {"type": "date"},
+					"algo": {"type": "keyword"},
+					"event": {"type": "keyword"},
+					"history": {
+						"type": "nested",
+						"properties": {
+							"index": {"type": "integer"},
+							"timestamp": {"type": "keyword"},
+							"close": {"type": "double"}
+						}
+					},
+					"priming": {
+						"type": "nested",
+						"properties": {
+							"index": {"type": "integer"},
+							"close": {"type": "double"}
+						}
+					},
+					"contract": {
+						"type": "object",
+						"properties": {
+							"symbol": {"type": "keyword"},
+							"expiry": {"type": "keyword"},
+							"exchange": {"type": "keyword"},
+							"currency": {"type": "keyword"},
+							"localSymbol": {"type": "keyword"},
+							"secType": {"type": "keyword"},
+							"multiplier": {"type": "keyword"},
+							"tradingClass": {"type": "keyword"},
+							"conId": {"type": "long"}
+						}
+					}
+				}
+			})
+			return True
+		except Exception as e:
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log(f"⚠️ ES prepare (seed) failed — {e}")
+				except Exception:
+					pass
+				self._es_warned = True
+			return False
+
+	def _collect_indicators_for_es(self):
+		"""Return a tuple (emas: dict, cci: float|None) with all available EMAs and latest CCI."""
+		emas = {}
+		try:
+			multi = getattr(self, '_multi_emas', None)
+			if isinstance(multi, dict) and multi:
+				for span, val in multi.items():
+					if isinstance(val, (int, float)):
+						emas[f"EMA{span}"] = float(val)
+			# Include commonly named EMAs if present
+			if hasattr(self, 'EMA_FAST_PERIOD') and hasattr(self, 'ema_fast') and isinstance(self.ema_fast, (int, float)):
+				emas[f"EMA{self.EMA_FAST_PERIOD}"] = float(self.ema_fast)
+			if hasattr(self, 'EMA_SLOW_PERIOD') and hasattr(self, 'ema_slow') and isinstance(self.ema_slow, (int, float)):
+				emas[f"EMA{self.EMA_SLOW_PERIOD}"] = float(self.ema_slow)
+			if hasattr(self, 'EMA_PERIOD') and hasattr(self, 'live_ema') and isinstance(self.live_ema, (int, float)):
+				emas[f"EMA{self.EMA_PERIOD}"] = float(self.live_ema)
+		except Exception:
+			pass
+		cci_val = None
+		try:
+			if hasattr(self, 'cci_values') and self.cci_values:
+				cci_val = float(self.cci_values[-1])
+			elif hasattr(self, 'prev_cci') and isinstance(self.prev_cci, (int, float)):
+				cci_val = float(self.prev_cci)
+		except Exception:
+			cci_val = None
+		return emas, cci_val
+
+	def _collect_contract_for_es(self):
+		"""Collect a stable subset of contract fields for ES logging."""
+		c = getattr(self, 'contract', None)
+		params = getattr(self, '_contract_params', {}) or {}
+		def _get(attr, fallback_key=None):
+			val = getattr(c, attr, None)
+			if val is None and fallback_key:
+				val = params.get(fallback_key)
+			return val
+		try:
+			return {
+				"symbol": _get('symbol', 'symbol'),
+				"expiry": _get('lastTradeDateOrContractMonth', 'lastTradeDateOrContractMonth'),
+				"exchange": _get('exchange', 'exchange'),
+				"currency": _get('currency', 'currency'),
+				"localSymbol": _get('localSymbol'),
+				"secType": _get('secType'),
+				"multiplier": _get('multiplier'),
+				"tradingClass": _get('tradingClass'),
+				"conId": getattr(c, 'conId', None),
+			}
+		except Exception:
+			return None
+
+	def _es_log_trade(self, event: str, *, price: float, action: str, quantity: int, reason: str = None, pnl: float = None, entry_action: str = None, exit_action: str = None):
+		"""Index a trade event to Elasticsearch if enabled."""
+		if not self._es_prepare_trades():
+			return
+		try:
+			# Normalize/ensure a non-empty reason for Kibana clarity
+			if not reason:
+				if event == 'enter':
+					reason = 'enter'
+				else:
+					reason = 'unspecified'
+			emas, cci_val = self._collect_indicators_for_es()
+			contract_info = self._collect_contract_for_es()
+			# For exits, always compute the correct exit action and set action field accordingly
+			if event == 'exit':
+				if isinstance(entry_action, str):
+					ua = entry_action.upper()
+					computed_exit_action = 'SELL' if ua == 'BUY' else ('BUY' if ua == 'SELL' else None)
+				else:
+					computed_exit_action = None
+				# Use computed_exit_action for both action and exit_action fields
+				action = computed_exit_action if computed_exit_action else action
+				exit_action = computed_exit_action if computed_exit_action else exit_action
+			doc = {
+				"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+				"algo": type(self).__name__,
+				"contract": contract_info or None,
+				"event": event,
+				"action": action.upper(),
+				"entry_action": (entry_action.upper() if isinstance(entry_action, str) else None),
+				"exit_action": (exit_action.upper() if isinstance(exit_action, str) else None),
+				"quantity": int(quantity),
+				"price": float(price),
+				"pnl": float(pnl) if pnl is not None else None,
+				"cci": cci_val,
+				"emas": emas or None,
+				"reason": reason,
+			}
+			# Clean None fields that ES might not like
+			doc = {k: v for k, v in doc.items() if v is not None}
+			import es_client as _es
+			_es.index_doc(self._es_client, self._es_trades_index, doc)
+		except Exception as e:
+			# One-time warning to avoid noisy logs
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log(f"⚠️ ES index failed — {e}")
+				except Exception:
+					pass
+				self._es_warned = True
+			return
+
+	def _es_log_seed_history(self, bars) -> None:
+		"""Index a single 'seed' document with the full historical bars fetched."""
+		if not self._es_prepare_seed():
+			return
+		try:
+			contract_info = self._collect_contract_for_es()
+			# Build compact history payload: index, timestamp, close
+			history = []
+			for idx, b in enumerate(list(bars) or [], start=1):
+				try:
+					# Support dict-like bars or objects with attributes
+					if isinstance(b, dict):
+						raw_ts = b.get('timestamp') or b.get('date') or b.get('time')
+						close = b.get('close')
+					else:
+						raw_ts = getattr(b, 'timestamp', None) or getattr(b, 'date', None) or getattr(b, 'time', None)
+						close = getattr(b, 'close', None)
+					# Convert datetime to ISO string; keep numbers/strings as-is
+					if hasattr(raw_ts, 'isoformat'):
+						ts_val = raw_ts.isoformat()
+					else:
+						ts_val = raw_ts
+					history.append({
+						"index": idx,
+						"timestamp": ts_val,
+						"close": float(close) if close is not None else None,
+					})
+				except Exception:
+					# Skip malformed bar entries gracefully
+					pass
+			# Drop None fields inside history objects
+			for h in history:
+				for k in list(h.keys()):
+					if h[k] is None:
+						del h[k]
+			doc = {
+				# Keep fields in the requested order
+				"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+				"algo": type(self).__name__,
+				"contract": contract_info or None,
+				"event": "seed",
+				"history": history,
+			}
+			# Clean up Nones at top-level
+			doc = {k: v for k, v in doc.items() if v is not None}
+			import es_client as _es
+			_es.index_doc(self._es_client, self._es_seed_index, doc)
+		except Exception as e:
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log(f"⚠️ ES seed index failed — {e}")
+				except Exception:
+					pass
+				self._es_warned = True
+
+	def _es_log_priming_used(self, used: list[float]) -> None:
+		"""Index a single 'priming' document with the exact closes used to prime indicators."""
+		if not self._es_prepare_seed():
+			return
+		try:
+			contract_info = self._collect_contract_for_es()
+			priming = [{"index": i + 1, "close": float(v)} for i, v in enumerate(list(used) or [])]
+			doc = {
+				# Keep fields in the requested order
+				"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+				"algo": type(self).__name__,
+				"contract": contract_info or None,
+				"event": "priming",
+				"priming": priming,
+			}
+			import es_client as _es
+			_es.index_doc(self._es_client, self._es_seed_index, doc)
+		except Exception as e:
+			if not getattr(self, '_es_warned', False):
+				try:
+					self.log(f"⚠️ ES priming index failed — {e}")
+				except Exception:
+					pass
+				self._es_warned = True
+
+	def _log_trade_enter_to_es(self, *, price: float, action: str, quantity_sign: int):
+		# For enter, action and entry_action are the same
+		self._es_log_trade('enter', price=price, action=action, quantity=quantity_sign, entry_action=action)
+
+	def _log_trade_exit_to_es(self, *, price: float, action: str, quantity_sign: int, reason: str, pnl: float):
+		# For exit, determine the correct exit side and include entry_action for clarity
+		entry_act = getattr(self, 'entry_action', None)
+		exit_act = action
+		if isinstance(entry_act, str):
+			ua = entry_act.upper()
+			exit_act = 'SELL' if ua == 'BUY' else ('BUY' if ua == 'SELL' else action)
+		self._es_log_trade('exit', price=price, action=exit_act, quantity=quantity_sign, reason=reason, pnl=pnl, entry_action=entry_act, exit_action=exit_act)
 
 	def _set_trade_phase(self, new_phase: str, *, reason: str = None):
 		"""Transition trade_phase with a single structured log line.
@@ -505,11 +1206,25 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 					self.log("⚠️ Test order skipped — no valid price")
 					self._test_order_done = True
 					return
-			test_price = round(ref_price * self._test_order_fraction, 2)
-			self.log(f"🧪 TEST order prepared from {source}={ref_price} @ {test_price}")
-			# Prepare and send test limit order
+			# Choose a price that cannot fill: BUY far below market, SELL far above market
 			action = 'BUY' if self._test_order_action not in ('BUY', 'SELL') else self._test_order_action
+			if action == 'BUY':
+				# Ensure price is well below market
+				mult = min(self._test_order_fraction if self._test_order_fraction > 0 else 0.5, 0.5)
+				price_target = ref_price * mult
+			else:  # SELL
+				# Ensure price is well above market
+				mult = self._test_order_fraction if self._test_order_fraction and self._test_order_fraction > 1 else 2.0
+				price_target = ref_price * mult
+			# Round conservatively; fall back to 2 decimals
+			test_price = round(price_target, 2)
+			self.log(f"🧪 TEST ORDER (non-trading) from {source}={ref_price} -> limit {action} @ {test_price}")
+			# Prepare and send test limit order with a clear label in TWS
 			order = LimitOrder(action, self._test_order_qty, test_price)
+			try:
+				order.orderRef = f"TEST_STARTUP|{type(self).__name__}|{getattr(self.contract, 'symbol', 'UNKNOWN')}"
+			except Exception:
+				pass
 			self.ib.placeOrder(self.contract, order)
 			self.ib.sleep(self._test_order_delay_sec)
 			self.ib.cancelOrder(order)
@@ -558,25 +1273,95 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			entry_order = MarketOrder(action, quantity)
 			entry_order.transmit = False
 			self.ib.placeOrder(contract, entry_order)
+			# Ensure entry has an orderId before creating children (defensive for adapters/mocks)
+			for _ in range(20):  # ~2s max
+				if getattr(entry_order, 'orderId', None) is not None:
+					break
+				self.ib.sleep(0.1)
+			entry_id = getattr(entry_order, 'orderId', None)
+			if entry_id is None:
+				self.log("❌ Entry orderId not assigned — cancelling entry to avoid naked order")
+				try:
+					self.ib.cancelOrder(entry_order)
+				except Exception:
+					pass
+				return
+
 			sl_order = StopOrder(exit_action, quantity, sl_price)
 			sl_order.transmit = False
-			sl_order.parentId = entry_order.orderId
-			self.ib.placeOrder(contract, sl_order)
+			sl_order.parentId = entry_id
+			try:
+				self.ib.placeOrder(contract, sl_order)
+				self.log(f"📝 SL child placed: orderId={getattr(sl_order, 'orderId', None)}, parentId={getattr(sl_order, 'parentId', None)}, price={sl_price}")
+			except Exception as e:
+				self.log(f"❌ Failed to place SL child: {e} — cancelling entry")
+				try:
+					self.ib.cancelOrder(entry_order)
+				except Exception:
+					pass
+				return
+
 			tp_order = LimitOrder(exit_action, quantity, tp_price)
 			tp_order.transmit = True
-			tp_order.parentId = entry_order.orderId
-			self.ib.placeOrder(contract, tp_order)
+			tp_order.parentId = entry_id
+			try:
+				self.ib.placeOrder(contract, tp_order)
+				self.log(f"📝 TP child placed: orderId={getattr(tp_order, 'orderId', None)}, parentId={getattr(tp_order, 'parentId', None)}, price={tp_price}")
+			except Exception as e:
+				self.log(f"❌ Failed to place TP child: {e} — cancelling entry & SL")
+				try:
+					self.ib.cancelOrder(entry_order)
+					self.ib.cancelOrder(sl_order)
+				except Exception:
+					pass
+				return
+
+			# Verify children exist and reference the parent; otherwise cancel to prevent a naked entry
+			children_ok = (
+				getattr(sl_order, 'orderId', None) is not None and
+				getattr(tp_order, 'orderId', None) is not None and
+				getattr(sl_order, 'parentId', None) == entry_id and
+				getattr(tp_order, 'parentId', None) == entry_id
+			)
+			self.log(f"📝 Bracket verification: entry_id={entry_id}, sl_orderId={getattr(sl_order, 'orderId', None)}, tp_orderId={getattr(tp_order, 'orderId', None)}, sl_parentId={getattr(sl_order, 'parentId', None)}, tp_parentId={getattr(tp_order, 'parentId', None)}")
+			if not children_ok:
+				self.log("❌ Bracket verification failed — cancelling all")
+				try:
+					self.ib.cancelOrder(entry_order)
+					self.ib.cancelOrder(sl_order)
+					self.ib.cancelOrder(tp_order)
+				except Exception:
+					pass
+				return
+
 			self.log(f"✅ Bracket order sent for {contract.symbol} ({action})")
-			# Track orders and IDs for legacy-style monitoring
+			# Post-placement verification: check all bracket orders are live in IB
+			try:
+				active_orders = [o for o in self.ib.orders() if getattr(o, 'orderId', None) in {entry_id, getattr(sl_order, 'orderId', None), getattr(tp_order, 'orderId', None)}]
+				if len(active_orders) < 3:
+					self.log(f"⚠️ Post-placement check: Only {len(active_orders)} of 3 bracket orders are active in IB! orderIds={[(getattr(o, 'orderId', None), getattr(o, 'parentId', None)) for o in active_orders]}")
+			except Exception as e:
+				self.log(f"⚠️ Post-placement bracket check error: {e}")
+			# Track orders and IDs for legacy-style monitoring (after verification)
 			self._last_entry_order = entry_order
 			self._last_sl_order = sl_order
 			self._last_tp_order = tp_order
-			self._last_entry_id = getattr(entry_order, 'orderId', None)
+			self._last_entry_id = entry_id
 			self._last_sl_id = getattr(sl_order, 'orderId', None)
 			self._last_tp_id = getattr(tp_order, 'orderId', None)
 			# Set direction & move to ACTIVE (bracket transmitted)
 			self.current_direction = 'LONG' if action.upper() == 'BUY' else 'SHORT'
+			# Track entry context for exit PnL & ES logging
+			self.entry_ref_price = ref_price
+			self.entry_action = action.upper()
+			self.entry_qty_sign = 1 if self.entry_action == 'BUY' else -1
+			self.current_tp_price = tp_price
 			self._set_trade_phase('ACTIVE', reason='Bracket transmitted')
+			# ES logging for entry — relies on EMAs computed earlier in the tick
+			try:
+				self._log_trade_enter_to_es(price=ref_price, action=self.entry_action, quantity_sign=self.entry_qty_sign)
+			except Exception:
+				pass
 		except Exception as e:
 			self.log(f"❌ Error in place_bracket_order: {e}")
 			return
@@ -611,6 +1396,20 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				for order in self.ib.orders():
 					self.ib.cancelOrder(order)
 				self.log("❌ All open orders cancelled after SL breach")
+				# ES logging for exit (SL breach)
+				try:
+					if isinstance(self.entry_ref_price, (int, float)) and isinstance(market_price, (int, float)) and isinstance(self.entry_qty_sign, int):
+						# Do not recalculate EMAs here; EMAs are computed once per tick in tick_prologue
+						pnl = (market_price - self.entry_ref_price) * self.entry_qty_sign
+						# For exits, log the actual closing side: opposite of entry if known
+						entry_act = getattr(self, 'entry_action', None)
+						if entry_act in ('BUY', 'SELL'):
+							exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'
+						else:
+							exit_action = 'SELL' if (self.entry_qty_sign or 1) > 0 else 'BUY'
+						self._log_trade_exit_to_es(price=market_price, action=exit_action, quantity_sign=self.entry_qty_sign or (1 if exit_action=='BUY' else -1), reason='SL_breach', pnl=pnl)
+				except Exception:
+					pass
 				self.current_sl_price = None
 				# Clear tracked bracket state
 				self._last_entry_order = None
@@ -645,6 +1444,25 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 					if oid in (self._last_sl_id, self._last_tp_id) and st == 'filled':
 						reason = 'SL' if oid == self._last_sl_id else 'TP'
 						self.log(f"✅ Detected {reason} fill for orderId={oid} — resetting trade state")
+						# ES logging for exit with PnL
+						try:
+							exit_price = None
+							if reason == 'SL' and isinstance(self.current_sl_price, (int, float)):
+								exit_price = float(self.current_sl_price)
+							elif reason == 'TP' and isinstance(self.current_tp_price, (int, float)):
+								exit_price = float(self.current_tp_price)
+							if exit_price is not None and isinstance(self.entry_ref_price, (int, float)) and isinstance(self.entry_qty_sign, int):
+								# Do not recalculate EMAs here; EMAs are computed once per tick in tick_prologue
+								pnl = (exit_price - self.entry_ref_price) * self.entry_qty_sign
+								# For exits, log the actual closing side: opposite of entry/position
+								entry_act = getattr(self, 'entry_action', None)
+								if entry_act in ('BUY', 'SELL'):
+									exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'
+								else:
+									exit_action = 'SELL' if (self.entry_qty_sign or 1) > 0 else 'BUY'
+								self._log_trade_exit_to_es(price=exit_price, action=exit_action, quantity_sign=self.entry_qty_sign, reason=reason, pnl=pnl)
+						except Exception:
+							pass
 						self.current_sl_price = None
 						# Clear tracked bracket state
 						self._last_entry_order = None
@@ -653,6 +1471,10 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 						self._last_entry_id = None
 						self._last_sl_id = None
 						self._last_tp_id = None
+						self.entry_ref_price = None
+						self.entry_action = None
+						self.entry_qty_sign = None
+						self.current_tp_price = None
 						self.current_direction = None
 						self._set_trade_phase('CLOSED', reason=f'{reason} fill')
 						try:
@@ -671,8 +1493,21 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			return
 
 	def cancel_all_orders(self):
-		for order in self.ib.orders():
-			self.ib.cancelOrder(order)
+		open_orders = self.ib.orders()
+		self.log(f"🔔 Attempting to cancel {len(open_orders)} open orders: {[getattr(o, 'orderId', None) for o in open_orders]}")
+		for order in open_orders:
+			try:
+				self.log(f"⏳ Cancelling orderId={getattr(order, 'orderId', None)}")
+				self.ib.cancelOrder(order)
+			except Exception as e:
+				self.log(f"❌ Exception cancelling orderId={getattr(order, 'orderId', None)}: {e}")
+		# Wait briefly and verify cancellation
+		self.ib.sleep(2)
+		remaining_orders = self.ib.orders()
+		if remaining_orders:
+			self.log(f"⚠️ {len(remaining_orders)} orders still open after cancel attempt: {[getattr(o, 'orderId', None) for o in remaining_orders]}")
+		else:
+			self.log("✅ All orders successfully cancelled.")
 
 	def close_all_positions(self):
 		positions = self.ib.positions()
@@ -746,83 +1581,65 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			# Fallback to naive now if timezone misconfigured
 			return datetime.datetime.now()
 
+	def should_trade_now(self, now=None, *, start=None, end=None, tz=None):
+		"""Return True if current time in a timezone is within an inclusive [start, end] window.
+
+		- start/end: tuples of (hour, minute). If not provided, use self.trade_start/self.trade_end.
+		- tz: timezone name. If not provided, use self.trade_timezone.
+		- now: optional datetime to evaluate. If naive, it's assigned the timezone; if aware, it's converted.
+		- If start or end is missing, returns True (no time gating).
+		"""
+		# Resolve timezone
+		_tzname = tz or getattr(self, 'trade_timezone', 'UTC')
+		try:
+			_tz = ZoneInfo(_tzname)
+		except Exception:
+			_tz = None
+		# Resolve now
+		if now is None:
+			try:
+				now = datetime.datetime.now(_tz) if _tz else datetime.datetime.now()
+			except Exception:
+				now = datetime.datetime.now()
+		else:
+			try:
+				if getattr(now, 'tzinfo', None) is None:
+					if _tz:
+						now = now.replace(tzinfo=_tz)
+				else:
+					if _tz:
+						now = now.astimezone(_tz)
+			except Exception:
+				pass
+		# Resolve window
+		_start = start if start is not None else getattr(self, 'trade_start', None)
+		_end = end if end is not None else getattr(self, 'trade_end', None)
+		if not (_start and _end):
+			return True
+		try:
+			sh, sm = int(_start[0]), int(_start[1])
+			eh, em = int(_end[0]), int(_end[1])
+			start_t = datetime.time(hour=sh, minute=sm)
+			end_t = datetime.time(hour=eh, minute=em)
+			now_t = now.time()
+			return start_t <= now_t <= end_t
+		except Exception:
+			# On invalid inputs, do not block trading
+			return True
+
 	def run(self):
 		self._maybe_perform_deferred_connection()
-		self._wait_for_round_minute()
+		# Perform seeding and startup tasks immediately — do not block them on round-minute wait
+		try:
+			self._auto_seed_generic()
+		except Exception:
+			pass
 		self._run_pre_run_hook()
 		self._maybe_startup_test_order()
+		# Align the live loop to a round minute only after seeding and any startup test order
+		self._wait_for_round_minute()
 		self.log(f"🤖 Bot Running | Interval: {getattr(self, 'CHECK_INTERVAL', '?')}s")
-		try:
-			self._main_loop()
-		except KeyboardInterrupt:
-			ts = datetime.datetime.now().strftime('%H:%M:%S')
-			self._graceful_shutdown(ts, reason='KeyboardInterrupt')
-		except SystemExit:
-			# SystemExit may be raised after we handle SIGINT manually elsewhere
-			ts = datetime.datetime.now().strftime('%H:%M:%S')
-			self._graceful_shutdown(ts, reason='SystemExit')
-			raise
-		finally:
-			try:
-				self.log("🏁 Run loop exited")
-			except Exception:
-				pass
-
-	def _graceful_shutdown(self, time_str=None, *, reason='manual'):
-		"""Attempt to cancel orders, close positions, disconnect IB cleanly.
-		Safe to call multiple times.
-		"""
-		try:
-			self.log(f"{time_str or datetime.datetime.now().strftime('%H:%M:%S')} 🛑 Graceful shutdown initiated ({reason})")
-		except Exception:
-			pass
-		# Cancel orders
-		try:
-			self.cancel_all_orders()
-			self.log("🧹 Orders cancelled")
-		except Exception:
-			pass
-		# Close positions
-		try:
-			self.close_all_positions()
-			self.log("📦 Positions close attempt issued")
-		except Exception:
-			pass
-		# Disconnect
-		try:
-			if getattr(self, 'ib', None) is not None and hasattr(self.ib, 'disconnect'):
-				self.ib.disconnect()
-				self.log("🔌 IB disconnected")
-				# Post-disconnect cool-down (requirement #3)
-				self.log("⏳ Waiting 2s for IB to release session")
-				time.sleep(2)
-		except Exception:
-			pass
-		# Remove client id from active registry (requirement #5 cleanup)
-		try:
-			with TradingAlgorithm._active_ids_lock:
-				if self.client_id in TradingAlgorithm._active_client_ids:
-					TradingAlgorithm._active_client_ids.discard(self.client_id)
-		except Exception:
-			pass
-		# Phase update
-		try:
-			self._set_trade_phase('CLOSED', reason=f'shutdown:{reason}')
-		except Exception:
-			pass
-
-	def _register_disconnect_atexit(self):
-		"""Ensure IB disconnects on interpreter shutdown."""
-		def _disc(algo_ref=self):
-			try:
-				if getattr(algo_ref, 'ib', None) is not None and hasattr(algo_ref.ib, 'disconnect'):
-					algo_ref.ib.disconnect()
-			except Exception:
-				pass
-		try:
-			atexit.register(_disc)
-		except Exception:
-			pass
+		self._main_loop()
 
 	def _maybe_perform_deferred_connection(self):
 		"""Handle deferred connection logic & late contract qualification if requested."""
@@ -860,13 +1677,6 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def _main_loop(self):
 		"""Primary infinite loop executing strategy ticks & housekeeping."""
 		while True:
-			# External stop requested (e.g., SIGINT handler)
-			if getattr(self, '_stop_requested', False):
-				try:
-					self.log("🛑 External stop flag detected — exiting loop")
-				except Exception:
-					pass
-				break
 			try:
 				self.ib.sleep(getattr(self, 'CHECK_INTERVAL', 60))
 				now = self._now_in_tz()
@@ -882,6 +1692,13 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 					break
 				self._manual_sl_check()
 				self._pre_strategy_housekeeping()
+				# Common trading window gate for all algorithms
+				try:
+					if not self.should_trade_now(now):
+						self.log(f"{time_str} ⏸️ Outside trading window — skipping")
+						continue
+				except Exception:
+					pass
 				self.on_tick(time_str)
 			except Exception as e:
 				self._handle_loop_exception(e)
@@ -950,7 +1767,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 
 	def _handle_loop_exception(self, exc):
 		"""Centralized loop exception handling (excludes SystemExit)."""
-		self.log(f"{datetime.datetime.now().strftime('%H:%M:%S')} ❌ Error: {exc}")
+		self.log_exception(exc, context=datetime.datetime.now().strftime('%H:%M:%S'))
 		# Performance optimization: when running under test with a lightweight mock IB (has call_count),
 		# skip expensive reconnect attempts and sleeps to keep error handling overhead bounded.
 		ib_ref = getattr(self, 'ib', None)
@@ -970,82 +1787,395 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def on_tick(self, time_str):
 		raise NotImplementedError("Subclasses must implement on_tick()")
 
+	def tick_prologue(
+		self,
+		time_str,
+		*,
+		update_ema: bool = False,
+		compute_cci: bool = False,
+		price_annotator=None,
+		update_history: bool = True,
+		invalid_price_message: str = "⚠️ Invalid price — skipping",
+	):
+		"""Common per-tick setup shared by algorithms.
+
+		Performs trading-window gating, fetches a valid price, logs standard lines,
+		updates EMAs and optional multi-EMA diagnostics, optionally updates price history,
+		and optionally computes/logs CCI.
+
+		Returns a dict on success with at least {'price': float} and, if requested,
+		{'cci': float|None}. Returns None when the caller should skip further work
+		(out-of-window or no valid price).
+		"""
+		# Gate trading window
+		if not self.gate_trading_window_or_skip(time_str):
+			return None
+		# Get price
+		price = self.get_valid_price()
+		if price is None:
+			self.log(f"{time_str} {invalid_price_message}")
+			return None
+		# Standard visibility/logging
+		self.log_market_price_saved(time_str, price)
+		if update_ema or getattr(self, 'auto_update_ema', True):
+			self.update_emas(price)
+			# Optional extra EMA diagnostics when enabled in subclasses
+			try:
+				self.maybe_log_extra_ema_diag(time_str)
+			except Exception:
+				pass
+		# Log price with optional annotations (e.g., EMAs)
+		fields = {}
+		try:
+			if callable(price_annotator):
+				annotations = price_annotator()
+				if isinstance(annotations, dict):
+					fields.update(annotations)
+		except Exception:
+			pass
+		self.log_price(time_str, price, **fields)
+		# Update price history if requested
+		if update_history:
+			try:
+				self.update_price_history_verbose(time_str, price, maxlen=500)
+			except Exception:
+				pass
+		# Optional CCI computation/logging
+		cci_val = None
+		if compute_cci:
+			try:
+				cci_val = self.compute_and_log_cci(time_str)
+			except Exception:
+				cci_val = None
+		return {"price": price, "cci": cci_val}
+
 	def reset_state(self):
 		pass
 
 	# Hook method intended to be optionally overridden by subclasses
 	def pre_run(self):
-		"""Optional setup executed once after wait_for_round_minute() and before main loop."""
+		"""Optional setup executed once before aligning to round-minute and before main loop."""
 		return
+
+	# --------------------------- Generic Seeding Utilities ---------------------------
+	def seed_price_history(self, *, bars_needed: int = 500, minutes: int = 500, cap: int = 500, extend: bool = False) -> int:
+		"""Seed self.price_history from recent 1-min historical closes.
+
+		- Uses seconds-based duration to avoid 'M' ambiguity (months) in IB API.
+		- Logs a concise summary including count and a small sample of bars.
+		- Returns the number of bars added or assigned; 0 on skip/failure.
+
+		extend=False will assign the fetched series if history is empty; otherwise replaces only when not extend.
+		"""
+		# Ensure container exists
+		if not hasattr(self, 'price_history') or self.price_history is None:
+			self.price_history = []
+		# Skip in tests/mocks or when not connected
+		ib_ref = getattr(self, 'ib', None)
+		try:
+			if ib_ref is None:
+				return 0
+			# Treat MagicMock-like test doubles as non-live
+			if hasattr(ib_ref, 'call_count'):
+				return 0
+			if not ib_ref.isConnected():
+				return 0
+		except Exception:
+			return 0
+		# Calculate duration in seconds; add small buffer to improve chance of bars_needed being met
+		try:
+			minutes = int(minutes) if isinstance(minutes, int) else bars_needed
+			seconds = max((minutes * 60) + 120, bars_needed * 60)
+		except Exception:
+			seconds = max(bars_needed * 60, 900)
+		duration = f"{seconds} S"
+		try:
+			bars = ib_ref.reqHistoricalData(
+				self.contract,
+				endDateTime='',
+				durationStr=duration,
+				barSizeSetting='1 min',
+				whatToShow='TRADES',
+				useRTH=False,
+				formatDate=1,
+				keepUpToDate=False,
+			)
+			# Log concise summary
+			try:
+				count = len(bars) if bars is not None else 0
+				def _bar_desc(b):
+					date = getattr(b, 'date', None) or getattr(b, 'time', None)
+					close = getattr(b, 'close', None)
+					return f"({date}, close={close})" if date is not None else f"(close={close})"
+				sample = ", ".join(_bar_desc(b) for b in list(bars)[-3:]) if count else ""
+				self.log(f"🗄️ Generic seed history: duration={duration} | bars={count} | sample={sample}")
+			except Exception:
+				pass
+				# Log ALL closes pulled (chunked to keep line lengths reasonable)
+				try:
+					if bars:
+						entries = []
+						for idx, b in enumerate(bars, start=1):
+							date = getattr(b, 'date', None) or getattr(b, 'time', None)
+							close = getattr(b, 'close', None)
+							entries.append(f"#{idx}:{date}|{close}")
+						# chunk into groups of ~40 per line
+						chunk = 40
+						for i in range(0, len(entries), chunk):
+							segment = ", ".join(entries[i:i+chunk])
+							self.log(f"🗄️ Seeded closes [{i+1}-{min(i+chunk, len(entries))}]: {segment}")
+				except Exception:
+					pass
+				# Export ALL closes to CSV (timestamp, index, close)
+				try:
+					if bars and getattr(self, '_seed_csv_path', None):
+						rows = []
+						for idx, b in enumerate(bars, start=1):
+							date = getattr(b, 'date', None) or getattr(b, 'time', None)
+							close = getattr(b, 'close', None)
+							rows.append([datetime.datetime.now().isoformat(timespec='seconds'), idx, str(date), close])
+						self._append_csv_rows(self._seed_csv_path, ['written_at', 'index', 'timestamp', 'close'], rows)
+						self.log(f"📤 Exported {len(rows)} seeded bars to CSV: {os.path.basename(self._seed_csv_path)}")
+				except Exception:
+					pass
+				# Also export the same seed history to Elasticsearch (single doc with all bars)
+				try:
+					if bars:
+						self._es_log_seed_history(bars)
+				except Exception:
+					pass
+			closes = [b.close for b in bars if hasattr(b, 'close')]
+			if not closes:
+				return 0
+			added = 0
+			if extend and self.price_history:
+				self.price_history.extend(closes[-bars_needed:])
+				added = len(closes[-bars_needed:])
+			else:
+				# Assign up to cap; if already have data, prefer assign when not extend
+				self.price_history = closes[-max(min(cap, len(closes)), bars_needed):]
+				added = len(self.price_history)
+			# Enforce cap
+			if len(self.price_history) > cap:
+				self.price_history = self.price_history[-cap:]
+			self.log(f"🧪 Generic seed complete: history={len(self.price_history)} bars")
+			# Dump exactly the closes used for priming (up to bars_needed; if fewer available, dump all)
+			try:
+				used_n = min(len(self.price_history), bars_needed)
+				used = self.price_history[-used_n:]
+				entries = [f"#{i+1}:{v}" for i, v in enumerate(used)]
+				chunk = 50
+				for i in range(0, len(entries), chunk):
+					segment = ", ".join(entries[i:i+chunk])
+					self.log(f"🗄️ Used closes for priming [{i+1}-{min(i+chunk, len(entries))}/{used_n}]: {segment}")
+			except Exception:
+				pass
+			# Export the exact used closes for priming to CSV (index, close)
+			try:
+				if getattr(self, '_priming_csv_path', None):
+					used_n = min(len(self.price_history), bars_needed)
+					used = self.price_history[-used_n:]
+					rows = [[datetime.datetime.now().isoformat(timespec='seconds'), i+1, v] for i, v in enumerate(used)]
+					self._append_csv_rows(self._priming_csv_path, ['written_at', 'index', 'close'], rows)
+					self.log(f"📤 Exported {len(rows)} priming closes to CSV: {os.path.basename(self._priming_csv_path)}")
+			except Exception:
+				pass
+			# Also export the exact used closes for priming to Elasticsearch (single doc)
+			try:
+				used_n = min(len(self.price_history), bars_needed)
+				used = self.price_history[-used_n:]
+				self._es_log_priming_used(used)
+			except Exception:
+				pass
+			return added
+		except Exception as e:
+			self.log(f"⚠️ Generic seed failed: {e}")
+			return 0
+
+	def _auto_seed_generic(self):
+		"""Idempotent generic seeding executed for all algorithms before subclass pre_run.
+
+		Skips when disabled, under tests/mocks, or when enough history exists.
+		"""
+		try:
+			if not getattr(self, '_auto_seed_enabled', True):
+				return
+			need = int(getattr(self, '_auto_seed_bars', 500))
+			minutes = int(getattr(self, '_auto_seed_minutes', need))
+			cur = len(getattr(self, 'price_history', []) or [])
+			if cur < need:
+				added = self.seed_price_history(bars_needed=need, minutes=minutes, cap=500, extend=False)
+				if added > 0:
+					try:
+						self.log(f"🧰 Auto-seed primed {added} bars for initial indicators")
+					except Exception:
+						pass
+			# Whether we added or already had enough, prime indicators if we have sufficient history
+			try:
+					# Prime indicators as long as we have some history; each indicator checks its own required period.
+					if len(getattr(self, 'price_history', []) or []) > 0:
+						self._prime_indicators_from_history()
+			except Exception:
+					pass
+		except Exception:
+			return
+
+	def _prime_indicators_from_history(self):
+		"""Compute and set initial indicator values from current price_history.
+
+		- EMA fast/slow if periods are present (EMA_FAST_PERIOD/EMA_SLOW_PERIOD)
+		- Multi-EMAs if multi_ema_spans/_multi_emas are present
+		- CCI if CCI_PERIOD and a calculator exist (prefer subclass calculate_and_log_cci)
+		"""
+		closes = list(getattr(self, 'price_history', []) or [])
+		if not closes:
+			return
+		# Prefer subclass timezone-aware time string for logs
+		try:
+			now = self._now_in_tz()
+			time_str = now.strftime('%H:%M:%S')
+		except Exception:
+			time_str = datetime.datetime.now().strftime('%H:%M:%S')
+		# EMA fast/slow
+		try:
+			fast_period = getattr(self, 'EMA_FAST_PERIOD', None)
+			slow_period = getattr(self, 'EMA_SLOW_PERIOD', None)
+			if isinstance(fast_period, int) and len(closes) >= fast_period:
+				alpha = 2/(fast_period+1)
+				ema = closes[0]
+				for p in closes[1:]:
+					ema = p*alpha + ema*(1-alpha)
+				self.ema_fast = round(ema, 4)
+			if isinstance(slow_period, int) and len(closes) >= slow_period:
+				alpha = 2/(slow_period+1)
+				ema = closes[0]
+				for p in closes[1:]:
+					ema = p*alpha + ema*(1-alpha)
+				self.ema_slow = round(ema, 4)
+		except Exception:
+			pass
+		# Multi-EMAs (diagnostics-friendly)
+		try:
+			spans = getattr(self, 'multi_ema_spans', None)
+			if spans and isinstance(spans, (list, tuple, set)):
+				if not hasattr(self, '_multi_emas') or self._multi_emas is None:
+					self._multi_emas = {}
+				for span in spans:
+					if isinstance(span, int) and len(closes) >= span:
+						alpha = 2/(span+1)
+						ema = closes[0]
+						for p in closes[1:]:
+							ema = p*alpha + ema*(1-alpha)
+						self._multi_emas[span] = round(ema, 4)
+						# Maintain short history buffers if present
+						try:
+							if hasattr(self, '_multi_ema_histories') and span in self._multi_ema_histories:
+								self._multi_ema_histories[span].append(self._multi_emas[span])
+						except Exception:
+							pass
+				# Sync primary fast/slow from multi if applicable
+				try:
+					if isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int):
+						self.ema_fast = self._multi_emas.get(self.EMA_FAST_PERIOD, getattr(self, 'ema_fast', None))
+					if isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int):
+						self.ema_slow = self._multi_emas.get(self.EMA_SLOW_PERIOD, getattr(self, 'ema_slow', None))
+				except Exception:
+					pass
+		except Exception:
+			pass
+		# CCI prime
+		try:
+			cci_period = getattr(self, 'CCI_PERIOD', 14)
+			if isinstance(cci_period, int) and len(closes) >= cci_period:
+				cci_val = None
+				# Prefer subclass calculator for proper logging/mode
+				calc = getattr(self, 'calculate_and_log_cci', None)
+				if callable(calc):
+					cci_val = calc(closes, time_str)
+				else:
+					from statistics import mean, stdev
+					window = closes[-cci_period:]
+					avg_tp = mean(window)
+					try:
+						dev = stdev(window)
+						cci_val = 0 if dev == 0 else (window[-1] - avg_tp) / (0.015 * dev)
+					except Exception:
+						cci_val = None
+				if cci_val is not None:
+					self.prev_cci = cci_val
+					try:
+						if hasattr(self, 'cci_values') and isinstance(self.cci_values, list):
+							self.cci_values.append(cci_val)
+							self.cci_values = self.cci_values[-100:]
+					except Exception:
+						pass
+		except Exception:
+			pass
+		# Snapshot all calculated indicators for visibility
+		try:
+			indicators = []
+			if isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int) and hasattr(self, 'ema_fast'):
+				indicators.append(f"EMA_fast({self.EMA_FAST_PERIOD})={getattr(self, 'ema_fast', None)}")
+			if isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int) and hasattr(self, 'ema_slow'):
+				indicators.append(f"EMA_slow({self.EMA_SLOW_PERIOD})={getattr(self, 'ema_slow', None)}")
+			# Multi-EMAs summary
+			multi = getattr(self, '_multi_emas', None)
+			if isinstance(multi, dict) and multi:
+				ordered = ", ".join(f"{k}:{v}" for k, v in sorted(multi.items()))
+				indicators.append(f"multiEMA={{ {ordered} }}")
+			# CCI
+			if hasattr(self, 'prev_cci') and isinstance(getattr(self, 'CCI_PERIOD', None), int):
+				indicators.append(f"CCI({self.CCI_PERIOD})={getattr(self, 'prev_cci', None)}")
+			if indicators:
+				self.log(f"🧮 Indicators initialized → {' | '.join(indicators)}")
+		except Exception:
+			pass
+		# Export indicator snapshot to CSV (one row per indicator)
+		try:
+			if getattr(self, '_indicators_csv_path', None):
+				written_at = datetime.datetime.now().isoformat(timespec='seconds')
+				rows = []
+				if isinstance(getattr(self, 'EMA_FAST_PERIOD', None), int) and hasattr(self, 'ema_fast'):
+					rows.append([written_at, 'EMA_fast', getattr(self, 'EMA_FAST_PERIOD', None), getattr(self, 'ema_fast', None)])
+				if isinstance(getattr(self, 'EMA_SLOW_PERIOD', None), int) and hasattr(self, 'ema_slow'):
+					rows.append([written_at, 'EMA_slow', getattr(self, 'EMA_SLOW_PERIOD', None), getattr(self, 'ema_slow', None)])
+				multi = getattr(self, '_multi_emas', None)
+				if isinstance(multi, dict) and multi:
+					for span, val in sorted(multi.items()):
+						rows.append([written_at, 'EMA', span, val])
+				if hasattr(self, 'prev_cci') and isinstance(getattr(self, 'CCI_PERIOD', None), int):
+					rows.append([written_at, 'CCI', getattr(self, 'CCI_PERIOD', None), getattr(self, 'prev_cci', None)])
+				if rows:
+					self._append_csv_rows(self._indicators_csv_path, ['written_at', 'indicator', 'period', 'value'], rows)
+					self.log(f"📤 Exported {len(rows)} indicators to CSV: {os.path.basename(self._indicators_csv_path)}")
+		except Exception:
+			pass
+
+	def _append_csv_rows(self, path, headers, rows):
+		"""Append rows to a CSV file, writing the header if the file does not exist."""
+		try:
+			import csv
+			# Ensure directory exists
+			dirname = os.path.dirname(path)
+			if dirname:
+				os.makedirs(dirname, exist_ok=True)
+			file_exists = os.path.exists(path)
+			with open(path, 'a', newline='', encoding='utf-8') as f:
+				writer = csv.writer(f)
+				if not file_exists:
+					writer.writerow(headers)
+				for r in rows:
+					writer.writerow(r)
+		except Exception:
+			pass
 
 	def _attempt_initial_connect(self):
 		"""Attempt to connect with retries + timeout; falls back to delayed data type.
 		Sets self._connected flag. Logs each attempt and final status.
 		"""
 		self._connected = False
-		# Strategy: keep requested client id fixed unless collision strongly suspected.
-		# If collisions persist, optionally randomize from a high offset range (100-899) once.
-		client_id_randomized = False
-		last_error = None
-		timeout_failures = 0  # Count consecutive TimeoutError occurrences (often blank message)
-		first_requested_id = self.requested_client_id
-		now = time.time()
-		# Pre-attempt safeguard: if this clientId failed very recently, randomize before first try
-		try:
-			with TradingAlgorithm._active_ids_lock:
-				last_fail = TradingAlgorithm._failed_client_history.get(first_requested_id)
-			if last_fail and (now - last_fail) < TradingAlgorithm._client_reuse_cooldown:
-				alt_id = None
-				for _ in range(5):
-					candidate = random.randint(100, 899)
-					if candidate != first_requested_id and candidate not in TradingAlgorithm._active_client_ids and TradingAlgorithm._failed_client_history.get(candidate, 0) + TradingAlgorithm._client_reuse_cooldown < now:
-						alt_id = candidate
-						break
-				if alt_id is not None:
-					self.log(f"🎲 Pre-emptive clientId switch {first_requested_id} -> {alt_id} (recent failure within cooldown)")
-					self.client_id = alt_id
-					self.requested_client_id = alt_id
-					client_id_randomized = True
-		except Exception:
-			pass
 		for attempt in range(1, self._connection_attempts + 1):
 			try:
-				# Optional randomized fallback (single switch) if repeated identical error suggests stale accepted slot.
-				if not client_id_randomized and isinstance(self.requested_client_id, int):
-					trigger_randomize = False
-					# Randomize immediately AFTER first TimeoutError (attempt 1) to accelerate recovery
-					if attempt > 1 and timeout_failures >= 1:
-						trigger_randomize = True
-					if last_error and not trigger_randomize:
-						le = str(last_error).lower()
-						if any(k in le for k in ('already', 'in use', 'duplicate', 'max rate', 'connection refused')):
-							trigger_randomize = True
-					# Fallback heuristic: two consecutive blank TimeoutErrors
-					if not trigger_randomize and timeout_failures >= 2:
-						trigger_randomize = True
-					if trigger_randomize:
-						alt_id = None
-						for _ in range(5):
-							candidate = random.randint(100, 899)
-							if candidate != self.requested_client_id and candidate not in TradingAlgorithm._active_client_ids and TradingAlgorithm._failed_client_history.get(candidate, 0) + TradingAlgorithm._client_reuse_cooldown < time.time():
-								alt_id = candidate
-								break
-						if alt_id is not None:
-							self.log(f"🎲 Switching to alternate clientId {self.requested_client_id} -> {alt_id} (adaptive randomization)")
-							self.client_id = alt_id
-							self.requested_client_id = alt_id
-							client_id_randomized = True
-							# Rebuild IB instance to ensure fresh socket state
-							try:
-								if getattr(self, 'ib', None) is not None:
-									self.ib.disconnect()
-							except Exception:
-								pass
-							try:
-								self.ib = IB()
-								self.log("🔄 IB instance recreated for fresh connect attempt")
-							except Exception as _re:
-								self.log(f"⚠️ Failed to recreate IB instance: {_re}")
 				# Ensure an event loop exists in this thread for ib_insync
 				try:
 					asyncio.get_event_loop()
@@ -1078,76 +2208,14 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				self.log(f"✅ Connected to IB Gateway ({self._ib_host}:{self._ib_port}) in {elapsed:.2f}s as clientId={self.client_id}{mismatch}")
 				break
 			except Exception as e:
-				last_error = e
-				etype = type(e).__name__
-				self.log(f"❌ Connect attempt {attempt} failed ({etype}): {e}")
-				if etype == 'TimeoutError':
-					timeout_failures += 1
-				else:
-					timeout_failures = 0
-				# Record failure timestamp for this requested id
-				try:
-					with TradingAlgorithm._active_ids_lock:
-						TradingAlgorithm._failed_client_history[self.requested_client_id] = time.time()
-				except Exception:
-					pass
-				# Extra diagnostics for common stale-socket / duplicate client scenarios
-				try:
-					from socket import create_connection
-					# Lightweight port reachability probe (0.5s timeout)
-					probe_ok = False
-					try:
-						with create_connection((self._ib_host, self._ib_port), timeout=0.5):
-							probe_ok = True
-					except Exception as _pe:
-						self.log(f"🕵️ Port probe failed: {_pe}")
-					if probe_ok:
-						self.log("🕵️ Port reachable; failure likely authentication / clientId in-use / session not released yet")
-				except Exception:
-					pass
+				self.log(f"❌ Connect attempt {attempt} failed: {e}")
 				# Disconnect defensively
 				try:
 					self.ib.disconnect()
 				except Exception:
 					pass
 				if attempt < self._connection_attempts:
-					# Backoff slightly longer after multiple timeouts to let server release prior session
-					if timeout_failures >= 2:
-						self.log("⏱️ Extra backoff after repeated timeouts (2s)")
-						time.sleep(2)
-					# Add small jitter to reduce thundering herd
-					jitter = random.uniform(0, 0.75)
-					time.sleep(self._connection_retry_delay + jitter)
+					time.sleep(self._connection_retry_delay)
 				else:
 					self.log("🚫 Exhausted connection attempts; continuing without active connection (will retry later).")
 
-	def _attempt_reconnect(self):
-		for attempt in range(1, 4):
-			try:
-				try:
-					asyncio.get_event_loop()
-				except RuntimeError:
-					loop = asyncio.new_event_loop()
-					asyncio.set_event_loop(loop)
-				self.ib.connect(self._ib_host, self._ib_port, clientId=self.requested_client_id)
-				if self.ib.isConnected():
-					try:
-						if hasattr(self.ib, 'reqMarketDataType'):
-							self.ib.reqMarketDataType(3)
-					except Exception:
-						pass
-					# Refresh effective id
-					try:
-						cid = getattr(getattr(self.ib, 'client', None), 'clientId', None)
-						if isinstance(cid, int):
-							self.client_id = cid
-					except Exception:
-						pass
-					mismatch = '' if self.client_id == self.requested_client_id else f" (mismatch: requested {self.requested_client_id} got {self.client_id})"
-					self.log(f"🔄 Reconnected on attempt {attempt} as clientId={self.client_id}{mismatch}")
-					return True
-			except Exception as e:
-				self.log(f"❌ Reconnect attempt {attempt} failed: {e}")
-			time.sleep(self._connection_retry_delay)
-		self.log("🚫 Reconnect attempts exhausted.")
-		return False

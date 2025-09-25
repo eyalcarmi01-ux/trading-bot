@@ -1,6 +1,4 @@
 from algorithms.trading_algorithms_class import TradingAlgorithm
-import math
-import datetime
 from statistics import stdev, mean
 
 # NOTE: File renamed from cci14rev_trading_algorithm.py; class retained as CCI14_120_TradingAlgorithm
@@ -40,53 +38,12 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 			self.cli_price = None
 
 	def pre_run(self):
-		"""Warm-up: collect 14 prices for CCI and initialize EMA10 from recent history."""
-		try:
-			self.log("🔍 Preparing CCI14 calculation: collecting price history...\n")
-			while len(self.price_history) < self.CCI_PERIOD:
-				price = self.get_valid_price()
-				# Sleep the check interval to mirror legacy sampling cadence
-				self.ib.sleep(self.CHECK_INTERVAL)
-				if isinstance(price, (int, float)) and not (isinstance(price, float) and math.isnan(price)):
-					self.price_history.append(price)
-					self.log(f"⏳ CCI History: {len(self.price_history)}/{self.CCI_PERIOD} collected")
-				else:
-					self.log("⚠️ Invalid price — skipping")
-		except Exception as e:
-			self.log(f"⚠️ Warm-up error: {e}")
-			return
-		# After collecting enough prices, initialize EMA10 from last 10 prices
-		if len(self.price_history) >= self.EMA_FAST_PERIOD:
-			recent = self.price_history[-self.EMA_FAST_PERIOD:]
-			self.ema_fast = recent[0]
-			for p in recent[1:]:
-				self.ema_fast = self.calculate_ema(p, self.ema_fast, self.K_FAST)
-			self.log(f"📊 EMA10 source prices: {recent}")
-			self.log(f"📈 Initial EMA10 calculated from history: {self.ema_fast}")
-		self.log("✅ CCI14 history complete — bot ready to start\n")
+		"""Rely on base class generic seeding and indicator priming."""
+		# Base run() already executed _auto_seed_generic() before this hook.
+		# Nothing to do here unless subclass-specific warmups are required.
+		pass
 
-	def calculate_and_log_cci(self, prices, time_str):
-		if len(prices) < self.CCI_PERIOD:
-			self.log(f"{time_str} ⚠️ Not enough data for CCI")
-			return None
-		typical_prices = prices[-self.CCI_PERIOD:]
-		avg_tp = mean(typical_prices)
-		dev = stdev(typical_prices)
-		if dev == 0:
-			self.log(f"{time_str} ⚠️ StdDev is zero — CCI = 0")
-			return 0
-		cci = (typical_prices[-1] - avg_tp) / (0.015 * dev)
-		arrow = "🔼" if self.prev_cci is not None and cci > self.prev_cci else ("🔽" if self.prev_cci is not None and cci < self.prev_cci else "⏸️")
-		cci_display = round(cci, 2)
-		if self.enable_color:
-			if cci >= 120:
-				cci_display = f"{self._ANSI_RED}{round(cci,2)}{self._ANSI_RESET}"
-			elif cci <= -120:
-				cci_display = f"{self._ANSI_GREEN}{round(cci,2)}{self._ANSI_RESET}"
-		dir_fragment = f" | Dir: {self.active_direction}" if self.active_direction else ""
-		self.log(f"{time_str} 📊 CCI14: {cci_display} | Prev: {round(self.prev_cci,2) if self.prev_cci is not None else '—'} {arrow} | Mean: {round(avg_tp,2)} | StdDev: {round(dev,2)}{dir_fragment}")
-		self.prev_cci = cci
-		return cci
+	# CCI calculation moved to base class (calculate_and_log_cci)
 
 	def check_long_condition(self):
 		v = self.cci_values
@@ -97,33 +54,17 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		return len(v) >= 3 and v[-3] >= 120 and v[-2] < 120 and v[-1] < v[-2]
 
 	def on_tick(self, time_str):
-		price = self.get_valid_price()
-		if price is None:
-			self.log(f"{time_str} ⚠️ Invalid price — skipping (EMAs preserved)\n")
+		ctx = self.tick_prologue(
+			time_str,
+			update_ema=True,
+			compute_cci=True,
+			price_annotator=None,
+			invalid_price_message="⚠️ Invalid price — skipping (EMAs preserved)",
+		)
+		if ctx is None:
 			return
-		# Update price history
-		self.update_price_history(price, maxlen=500)
-		# Calculate and log EMA10 using base class utility
-		if len(self.price_history) >= self.EMA_FAST_PERIOD:
-			last_price = self.price_history[-1]
-			# Initialize fast EMA if needed, then update with latest price
-			if self.ema_fast is None:
-				self.ema_fast = last_price
-			self.ema_fast = self.calculate_ema(last_price, self.ema_fast, self.K_FAST)
-			self.log_price(time_str, price, EMA10=self.ema_fast)
-		# Update EMA200 using base class utility
-		if self.ema_slow is not None:
-			self.ema_slow = self.calculate_ema(price, self.ema_slow, self.K_SLOW)
-		else:
-			self.ema_slow = price
-		# Calculate CCI
-		cci = None
-		if len(self.price_history) >= self.CCI_PERIOD:
-			cci = self.calculate_and_log_cci(self.price_history, time_str)
-			if cci is not None:
-				self.cci_values.append(cci)
-				if len(self.cci_values) > 100:
-					self.cci_values = self.cci_values[-100:]
+		price = ctx["price"]
+		cci = ctx["cci"]
 		# Check for active position
 		if self.has_active_position():
 			# Invoke base position handler to enable manual SL breach monitoring & fill scanning
@@ -137,6 +78,7 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		short_signal = self.check_short_condition()
 		ema_filter_long = self.ema_fast is not None and self.ema_slow is not None and self.ema_fast > self.ema_slow
 		ema_filter_short = self.ema_fast is not None and self.ema_slow is not None and self.ema_fast < self.ema_slow
+		self.log_checking_trade_conditions(time_str)
 		if long_signal:
 			if ema_filter_long:
 				self.log(f"{time_str} ⏳ LONG signal (CCI) + EMA10>EMA200 confirmed — sending bracket order")

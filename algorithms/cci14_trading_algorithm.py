@@ -1,19 +1,13 @@
 from algorithms.trading_algorithms_class import TradingAlgorithm
+import math
 import datetime
-from collections import deque
+from statistics import stdev, mean
 
-class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
-	def __init__(self, contract_params, check_interval, initial_ema, ib=None, *, multi_ema_diagnostics=True, ema_spans=(10,20,32,50,100,200), multi_ema_bootstrap=True, bootstrap_lookback_bars=300, classic_cci=False, **kwargs):
-		"""CCI14 compare strategy with optional multi-span EMA diagnostics & bootstrap.
-
-		Parameters:
-		- contract_params: dict for IB Future
-		- check_interval: seconds between ticks
-		- initial_ema: seed value when bootstrap unavailable
-		- multi_ema_diagnostics (bool): enable multi-span diagnostics (default True)
-		- ema_spans (tuple): spans to track (default legacy set)
-		- multi_ema_bootstrap (bool): attempt historical bootstrap if connected
-		- bootstrap_lookback_bars (int): approximate bars to request for seeding
+class CCI14TradingAlgorithm(TradingAlgorithm):
+	def __init__(self, contract_params, check_interval, initial_ema, ib=None, **kwargs):
+		"""
+		client_id (int): Pass as a kwarg to ensure unique IB connection per instance.
+		ib: Pass a mock IB instance for testing.
 		"""
 		super().__init__(contract_params, ib=ib, **kwargs)
 		self.CHECK_INTERVAL = check_interval
@@ -35,39 +29,46 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		self.paused_notice_shown = False
 		self.signal_action = None
 		self.signal_time = None
-		# Multi-EMA diagnostics state
-		self.multi_ema_enabled = multi_ema_diagnostics
-		self.multi_ema_bootstrap = multi_ema_bootstrap
-		self.bootstrap_lookback_bars = int(bootstrap_lookback_bars)
-		self.multi_ema_spans = tuple(sorted(set(ema_spans)))
-		# Initialize per-span EMAs & short histories for slope (last 10)
-		self._multi_emas = {span: initial_ema for span in self.multi_ema_spans}
-		self._multi_ema_histories = {span: deque(maxlen=10) for span in self.multi_ema_spans}
-		for span in self.multi_ema_spans:
-			self._multi_ema_histories[span].append(initial_ema)
-		self._multi_ema_k = {span: 2/(span+1) for span in self.multi_ema_spans}
-		self._multi_ema_bootstrapped = False
-		# CCI mode toggle (False = current stdev-based; True = classic mean deviation)
-		self.classic_cci_mode = bool(classic_cci)
 		# Ensure starting lifecycle phase in base is explicit
 		try:
 			self._set_trade_phase('IDLE', reason='Subclass init')
 		except Exception:
 			pass
 
-	# CCI calculation moved to base class (calculate_and_log_cci)
+	def calculate_and_log_cci(self, prices, time_str):
+		if len(prices) < self.CCI_PERIOD:
+			self.log(f"{time_str} ⚠️ Not enough data for CCI")
+			return None
+		typical_prices = prices[-self.CCI_PERIOD:]
+		avg_tp = mean(typical_prices)
+		dev = stdev(typical_prices)
+		if dev == 0:
+			self.log(f"{time_str} ⚠️ StdDev is zero — CCI = 0")
+			return 0
+		cci = (typical_prices[-1] - avg_tp) / (0.015 * dev)
+		arrow = "🔼" if self.prev_cci is not None and cci > self.prev_cci else ("🔽" if self.prev_cci is not None and cci < self.prev_cci else "⏸️")
+		self.log(f"{time_str} 📊 CCI14: {round(cci,2)} | Prev: {round(self.prev_cci,2) if self.prev_cci else '—'} {arrow} | Mean: {round(avg_tp,2)} | StdDev: {round(dev,2)}")
+		self.prev_cci = cci
+		return cci
 
 	def on_tick(self, time_str):
-		ctx = self.tick_prologue(
-			time_str,
-			update_ema=True,
-			compute_cci=True,
-			price_annotator=lambda: {"EMA10": self.ema_fast, "EMA200": self.ema_slow},
-		)
-		if ctx is None:
+		price = self.get_valid_price()
+		if price is None:
+			self.log(f"{time_str} ⚠️ Invalid price — skipping\n")
 			return
-		price = ctx["price"]
-		cci = ctx["cci"]
+		# Update EMAs
+		self.ema_fast = self.calculate_ema(price, self.ema_fast, self.K_FAST)
+		self.ema_slow = self.calculate_ema(price, self.ema_slow, self.K_SLOW)
+		self.log_price(time_str, price, EMA10=self.ema_fast, EMA200=self.ema_slow)
+		# Update price history and CCI
+		self.update_price_history(price, maxlen=500)
+		cci = None
+		if len(self.price_history) >= self.CCI_PERIOD:
+			cci = self.calculate_and_log_cci(self.price_history, time_str)
+			if cci is not None:
+				self.cci_values.append(cci)
+				if len(self.cci_values) > 100:
+					self.cci_values = self.cci_values[-100:]
 		# Check for active position
 		if self.has_active_position():
 			self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
@@ -94,17 +95,12 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 			if elapsed >= 180:
 				self.place_bracket_order(self.signal_action, self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				self.log(f"{time_str} ✅ Bracket sent — bot in active position\n")
+				# Direction persisted via base place_bracket_order
 				self.signal_time = None
 				self.signal_action = None
 			else:
 				remaining = round(180 - elapsed)
 				self.log(f"{time_str} ⏳ Waiting {remaining}s before sending bracket\n")
-
-	def pre_run(self):  # Hook invoked by base run()
-		"""Rely on base class generic seeding and indicator priming; diagnostics stay enabled."""
-		# Base run() already executed _auto_seed_generic() before this hook.
-		# Nothing to do here unless subclass-specific warmups are required.
-		pass
 
 	def reset_state(self):
 		self.price_history = []

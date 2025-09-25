@@ -1,12 +1,10 @@
 import datetime
-from zoneinfo import ZoneInfo
-from statistics import stdev, mean
 from typing import Optional, Tuple
 
-from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
+from algorithms.trading_algorithms_class import TradingAlgorithm
 
 
-class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
+class CCI14_200_TradingAlgorithm(TradingAlgorithm):
     """
     A CCI14-based strategy that triggers immediately when CCI crosses ±200:
       - If CCI > +200 -> SELL
@@ -20,124 +18,60 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
         contract_params,
         check_interval,
         initial_ema,
-        *,
-        trade_timezone: str = "Asia/Jerusalem",
+    *,
+    trade_timezone: str = "Asia/Jerusalem",
     trade_start: Optional[Tuple[int, int]] = (8, 0),
     trade_end: Optional[Tuple[int, int]] = (23, 0),
         ib=None,
+        classic_cci: bool = False,
         **kwargs,
     ):
-        super().__init__(contract_params, check_interval, initial_ema, ib=ib, **kwargs)
+        # Initialize the common base (connection, logging, contract, seeding config, etc.)
+        super().__init__(contract_params, ib=ib, **kwargs)
+        # Runtime cadence
+        self.CHECK_INTERVAL = check_interval
+        # Core indicator config
+        self.CCI_PERIOD = 14
+        # Trade parameters (kept consistent with legacy behavior)
+        self.TICK_SIZE = 0.01
+        self.SL_TICKS = 7
+        self.TP_TICKS_LONG = 10
+        self.TP_TICKS_SHORT = 10
+        self.QUANTITY = 1
+        # State containers
+        self.price_history = []
+        self.cci_values = []
+        self.prev_cci = None
+        # Trading window configuration
         self.trade_timezone = trade_timezone
         self.trade_start = trade_start
         self.trade_end = trade_end
+        # CCI mode toggle (False = stdev-based; True = classic mean deviation)
+        self.classic_cci_mode = bool(classic_cci)
+        # Ensure starting lifecycle phase explicit for visibility
+        try:
+            self._set_trade_phase('IDLE', reason='Subclass init')
+        except Exception:
+            pass
 
-    def should_trade_now(self, now: Optional[datetime.datetime] = None) -> bool:
-        """
-        Return True if current time in the configured timezone is within the
-        inclusive [trade_start, trade_end] window. If start/end are None, always True.
-        """
-        if not (self.trade_start and self.trade_end):
-            return True
-        if now is None:
-            now = datetime.datetime.now(ZoneInfo(self.trade_timezone))
-        else:
-            # Normalize provided naive datetimes to configured TZ, if needed
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=ZoneInfo(self.trade_timezone))
-            else:
-                # Convert to target timezone for comparison
-                now = now.astimezone(ZoneInfo(self.trade_timezone))
-        start_h, start_m = self.trade_start
-        end_h, end_m = self.trade_end
-        start_t = datetime.time(hour=start_h, minute=start_m)
-        end_t = datetime.time(hour=end_h, minute=end_m)
-        now_t = now.time()
-        return start_t <= now_t <= end_t
+    # should_trade_now is provided by the base class and shared across all algorithms
 
     def on_tick(self, time_str: str):
-        # Gate by trading window
-        if not self.should_trade_now():
-            self.log(f"{time_str} ⏸️ Outside trading window — skipping")
+        ctx = self.tick_prologue(
+            time_str,
+            update_ema=True,
+            compute_cci=True,
+            price_annotator=None,
+        )
+        if ctx is None:
             return
-
-        price = self.get_valid_price()
-        if price is None:
-            self.log(f"{time_str} ⚠️ Invalid price — skipping\n")
-            return
-        # Explicit legacy-style market price visibility (in addition to structured log_price below)
-        try:
-            self.log(f"{time_str} 💰 Market Price: {price:.2f}")
-            # Minute-aligned market price save line (legacy parity)
-            #try:
-            #    tz_now = datetime.datetime.now(ZoneInfo(self.trade_timezone))
-            #except Exception:
-            #    tz_now = datetime.datetime.now()
-            #minute_aligned = tz_now.replace(second=0, microsecond=0)
-            #self.log(f"{time_str} 📈 Market price saved for {minute_aligned}: {price:.2f}")
-        except Exception:
-            pass
-        # Multi-span EMA update (inherits structures from parent compare algorithm)
-        used_multi = False
-        try:
-            if hasattr(self, '_update_multi_emas'):
-                self._update_multi_emas(price)
-                used_multi = True
-        except Exception:
-            used_multi = False
-        if not used_multi:
-            # Fallback single fast/slow update
-            self.ema_fast = self.calculate_ema(price, self.ema_fast, self.K_FAST)
-            self.ema_slow = self.calculate_ema(price, self.ema_slow, self.K_SLOW)
-        # Standard price + primary EMA log
-        self.log_price(time_str, price, EMA10=self.ema_fast, EMA200=self.ema_slow)
-        # Additional multi-span diagnostics line (covers legacy "Live EMAs" data richness)
-        try:
-            if used_multi and hasattr(self, '_maybe_log_multi_ema_diag'):
-                self._maybe_log_multi_ema_diag(time_str)
-        except Exception:
-            pass
-
-        # Update price history and compute CCI14
-        prev_len = len(self.price_history) if hasattr(self, 'price_history') else 0
-        self.update_price_history(price, maxlen=500)
-        try:
-            if len(self.price_history) > prev_len:
-                # Legacy-style close series / TP addition logs
-                self.log(f"{time_str} 📊 Updated close_series with price: {price:.2f} | Length: {len(self.price_history)}")
-                self.log(f"{time_str} 📥 New TP added: {price:.2f}")
-        except Exception:
-            pass
-        # Log series maintenance information (legacy parity data points)
-        try:
-            self.log(f"{time_str} 📊 Updated price_history length: {len(self.price_history)}")
-            recent_tp = ", ".join(f"{p:.2f}" for p in self.price_history[-10:])
-            self.log(f"{time_str} 🧪 Recent TP Values: {recent_tp}")
-            self.log(f"{time_str} 🧼 Cleaned price series length: {len(self.price_history)}")
-            # Alias TP Series length (same as price_history here; typical price == close for current implementation)
-            # Use actual dynamic length (no fixed cap)
-            self.log(f"{time_str} 🧪 TP Series Length After Cleaning: {len(self.price_history)}")
-        except Exception:
-            pass
-        cci = None
-        if len(self.price_history) >= self.CCI_PERIOD:
-            # Reuse parent's calculation helper
-            cci = self.calculate_and_log_cci(self.price_history, time_str)
-            if cci is not None:
-                self.cci_values.append(cci)
-                if len(self.cci_values) > 100:
-                    self.cci_values = self.cci_values[-100:]
-                # Defensive: ensure concise legacy CCI summary exists (parent already logs, but guard future edits)
-                try:
-                    # Parent already emits, so this will be skipped unless implementation changes
-                    pass
-                except Exception:
-                    pass
+        price = ctx["price"]
+        cci = ctx["cci"]
 
         if cci is None:
             return
-        # Always log trade condition evaluation for parity even if active position
-        self.log(f"{time_str} 🚦 Checking trade conditions...")
+        # Standard condition-eval log
+        self.log_checking_trade_conditions(time_str)
         action = None
         if cci > 200:
             action = 'SELL'
@@ -158,4 +92,9 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
         else:
             self.log(f"{time_str} 🔍 No trade signal at the moment.")
             if active:
-                self.log(f"{time_str} � BLOCKED: Trade already active\n")
+                self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
+
+    def reset_state(self):
+        self.price_history = []
+        self.cci_values = []
+        self.prev_cci = None

@@ -1,3 +1,5 @@
 ib-insync>=0.9.84
 # Dev / QA tooling
 coverage>=7.6.0,<8
+# ES 8.x stack — keep client <9 to avoid incompatible Accept headers with ES 8
+elasticsearch>=8.13.0,<9

@@ -39,32 +39,30 @@ class TestLegacyHelpers(unittest.TestCase):
         self.algo.contract.conId = cid
         self.ib._trades.append(_Trade(cid))
 
-    def test_is_position_open_or_pending_detects_pending(self):
+    def test_pending_detection_detects_pending(self):
         # No positions, but a transmitted working order => True
         self._add_pending_trade(transmit=True, status='Submitted')
-        self.assertTrue(self.algo.is_position_open_or_pending())
+        self.assertTrue(self.algo.has_active_position())
 
-    def test_is_position_open_or_pending_ignores_filled(self):
+    def test_pending_detection_ignores_filled(self):
         self._add_pending_trade(transmit=True, status='Filled')
-        self.assertFalse(self.algo.is_position_open_or_pending())
+        self.assertFalse(self.algo.has_active_position())
 
-    def test_is_position_open_or_pending_ignores_non_transmit(self):
+    def test_pending_detection_ignores_non_transmit(self):
         self._add_pending_trade(transmit=False, status='Submitted')
-        self.assertFalse(self.algo.is_position_open_or_pending())
+        self.assertFalse(self.algo.has_active_position())
 
-    def test_is_position_open_or_pending_falls_back_to_position(self):
-        # Remove pending detection flag and add a position
-        self.algo.pending_order_detection = False
-        # Inject active position
+    def test_active_position_detected_via_positions(self):
+        # Inject active position (should be detected regardless of flags)
         fut_contract = type('C', (), {})()
         fut_contract.conId = getattr(self.algo.contract, 'conId', None) or 321
         self.algo.contract.conId = fut_contract.conId
         self.ib._positions = [MockPosition(fut_contract, 1)]
-        self.assertTrue(self.algo.is_position_open_or_pending())
+        self.assertTrue(self.algo.has_active_position())
 
-    def test_place_legacy_bracket_order_buy(self):
-        # Ensure method creates 3 orders with correct transmit flags
-        self.algo.place_legacy_bracket_order('BUY', 1)
+    def test_place_bracket_order_buy(self):
+        # Ensure base bracket creates 3 orders with correct transmit flags
+        self.algo.place_bracket_order('BUY', 1, self.algo.TICK_SIZE, self.algo.SL_TICKS, self.algo.TP_TICKS_LONG, self.algo.TP_TICKS_SHORT)
         orders = self.ib.orders()
         self.assertGreaterEqual(len(orders), 3)
         entry, sl, tp = orders[0], orders[1], orders[2]
@@ -74,15 +72,15 @@ class TestLegacyHelpers(unittest.TestCase):
         self.assertEqual(getattr(sl, 'parentId', None), getattr(entry, 'orderId', None))
         self.assertEqual(getattr(tp, 'parentId', None), getattr(entry, 'orderId', None))
 
-    def test_place_legacy_bracket_order_sell(self):
-        self.algo.place_legacy_bracket_order('SELL', 1)
+    def test_place_bracket_order_sell(self):
+        self.algo.place_bracket_order('SELL', 1, self.algo.TICK_SIZE, self.algo.SL_TICKS, self.algo.TP_TICKS_LONG, self.algo.TP_TICKS_SHORT)
         orders = self.ib.orders()
         self.assertGreaterEqual(len(orders), 3)
 
-    def test_place_legacy_bracket_order_invalid_action(self):
+    def test_place_bracket_order_invalid_action(self):
         # Should not raise; simply skip creating orders
         existing = len(self.ib.orders())
-        self.algo.place_legacy_bracket_order('HOLD', 1)
+        self.algo.place_bracket_order('HOLD', 1, self.algo.TICK_SIZE, self.algo.SL_TICKS, self.algo.TP_TICKS_LONG, self.algo.TP_TICKS_SHORT)
         self.assertEqual(len(self.ib.orders()), existing)
 
 
