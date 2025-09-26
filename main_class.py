@@ -16,9 +16,9 @@ from algorithms.trading_algorithms_class import TradingAlgorithm
 ema_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
 fib_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202602', exchange='NYMEX', currency='USD')
 # Use distinct contracts for each CCI algorithm
-cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202512', exchange='NYMEX', currency='USD')
+cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', exchange='NYMEX', currency='USD')
 cci14_120_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202511', exchange='NYMEX', currency='USD')
-cci14_200_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', exchange='NYMEX', currency='USD')
+cci14_200_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202512', exchange='NYMEX', currency='USD')
 
 
 
@@ -27,14 +27,15 @@ FORCE_CLOSE_TIME = (22, 50)  # Daily force-close (HH, MM) applied to all algorit
 
 def instantiate_algorithms():
     """Create algorithm instances with a uniform daily force-close time. Returns list."""
+    import time
     ema_algo = EMATradingAlgorithm(
         contract_params=ema_contract_params,
         client_id=22,
         ema_period=200,
         check_interval=60,
         initial_ema=80,
-    signal_override=0,
-    test_order_enabled=True,
+        signal_override=0,
+        test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
@@ -43,7 +44,7 @@ def instantiate_algorithms():
         client_id=18,
         check_interval=60,
         fib_levels=[0.236, 0.382, 0.5, 0.618, 0.786],
-    test_order_enabled=True,
+        test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
@@ -52,9 +53,9 @@ def instantiate_algorithms():
         client_id=19,
         check_interval=60,
         initial_ema=80,
-    multi_ema_diagnostics=True,
-    multi_ema_bootstrap=True,
-    test_order_enabled=True,
+        multi_ema_diagnostics=True,
+        multi_ema_bootstrap=True,
+        test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
@@ -64,7 +65,7 @@ def instantiate_algorithms():
         check_interval=60,
         initial_ema=80,
         cli_price=65.0,
-    test_order_enabled=True,
+        test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
@@ -75,9 +76,9 @@ def instantiate_algorithms():
         initial_ema=80,
         trade_timezone="Asia/Jerusalem",
         trade_start=(8, 0),
-    trade_end=(23, 0),  # Extended end of trading window to 23:00
-    classic_cci=True,  # Enable classic (mean deviation) CCI for 200-threshold variant by default
-    test_order_enabled=True,
+        trade_end=(23, 0),  # Extended end of trading window to 23:00
+        classic_cci=True,  # Enable classic (mean deviation) CCI for 200-threshold variant by default
+        test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )

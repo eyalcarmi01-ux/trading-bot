@@ -1,23 +1,5 @@
 """Removed. Use algorithms.cci14_120_trading_algorithm instead."""
 raise ImportError("cci14rev_trading_algorithm removed. Import CCI14_120_TradingAlgorithm from cci14_120_trading_algorithm")
-			self.log(f"📈 Initial EMA10 calculated from history: {self.ema_fast}")
-		self.log("✅ CCI14 history complete — bot ready to start\n")
-
-	def calculate_and_log_cci(self, prices, time_str):
-		if len(prices) < self.CCI_PERIOD:
-			self.log(f"{time_str} ⚠️ Not enough data for CCI")
-			return None
-		typical_prices = prices[-self.CCI_PERIOD:]
-		avg_tp = mean(typical_prices)
-		dev = stdev(typical_prices)
-		if dev == 0:
-			self.log(f"{time_str} ⚠️ StdDev is zero — CCI = 0")
-			return 0
-		cci = (typical_prices[-1] - avg_tp) / (0.015 * dev)
-		arrow = "🔼" if self.prev_cci is not None and cci > self.prev_cci else ("🔽" if self.prev_cci is not None and cci < self.prev_cci else "⏸️")
-		cci_display = round(cci, 2)
-		if self.enable_color:
-			if cci >= 120:
 				cci_display = f"{self._ANSI_RED}{round(cci,2)}{self._ANSI_RESET}"
 			elif cci <= -120:
 				cci_display = f"{self._ANSI_GREEN}{round(cci,2)}{self._ANSI_RESET}"

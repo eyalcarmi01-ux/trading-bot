@@ -1,5 +1,6 @@
 from ib_insync import *
-import datetime, time, math, functools, types, os, threading, atexit, asyncio
+import datetime, time, math, functools, types, os, threading, atexit, asyncio, logging
+import logging.handlers
 import traceback
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -49,7 +50,8 @@ class MethodLoggingMeta(type):
 								print(f"[{cls_name}][clientId=?] {_ts} {msg}")
 						except Exception:
 							# Best-effort fallback
-							if getattr(self, 'log_method_calls', False):
+							if getattr(self,
+							 'log_method_calls', False):
 								print(f"[{type(self).__name__}][clientId=?] {_ts} {msg}")
 				except Exception:
 					pass
@@ -130,6 +132,25 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	_shared_logs = {}
 	# One-time process-wide console padding guard
 	_console_padded_once = False
+	def _ensure_logger(self):
+		if hasattr(self, '_logger'):
+			return self._logger
+		log_tag = getattr(self, '_log_tag', type(self).__name__)
+		log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+		os.makedirs(log_dir, exist_ok=True)
+		log_file = os.path.join(log_dir, f"{log_tag}.log")
+		logger = logging.getLogger(log_tag)
+		logger.setLevel(logging.INFO)
+		if not logger.handlers:
+			handler = logging.handlers.TimedRotatingFileHandler(
+				log_file, when='midnight', backupCount=10, encoding='utf-8', delay=True
+			)
+			formatter = logging.Formatter('[%(name)s][clientId=%(client_id)s] %(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+			handler.setFormatter(formatter)
+			logger.addHandler(handler)
+		self._logger = logger
+		return logger
+
 	def log(self, msg: str):
 		"""Standardized logging with subclass/clientId prefix and wall-clock timestamp (YYYY-MM-DD HH:MM:SS)."""
 		log_tag = getattr(self, '_log_tag', type(self).__name__)
@@ -1235,136 +1256,185 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			self._test_order_done = True
 
 	def place_bracket_order(self, action, quantity, tick_size, sl_ticks, tp_ticks_long, tp_ticks_short):
+		max_retries = 3
+		for attempt in range(1, max_retries + 1):
+			try:
+				# Respect legacy cutoff: block new orders after cutoff time
+				if getattr(self, 'block_new_orders', False):
+					self.log("⛔ New orders blocked after cutoff time — skipping order placement")
+					return
+				# Mark phase if we were in SIGNAL_PENDING
+				if self.trade_phase == 'SIGNAL_PENDING':
+					self._set_trade_phase('BRACKET_SENT', reason=f'Sending bracket order (attempt {attempt})')
+				contract = self.contract
+				tick = self.ib.reqMktData(contract, snapshot=True)
+				# Wait briefly for fields to populate
+				ref_price = None
+				source = None
+				for _ in range(10):  # ~2s total
+					self.ib.sleep(0.2)
+					source, ref_price = self._pick_price(tick)
+					if source is not None:
+						break
+				if source is None:
+					self.log("⚠️ No valid price — skipping order")
+					return
+				if action.upper() == 'BUY':
+					tp_price = round(ref_price + tick_size * tp_ticks_long, 2)
+					sl_price = round(ref_price - tick_size * sl_ticks, 2)
+					exit_action = 'SELL'
+				elif action.upper() == 'SELL':
+					tp_price = round(ref_price - tick_size * tp_ticks_short, 2)
+					sl_price = round(ref_price + tick_size * sl_ticks, 2)
+					exit_action = 'BUY'
+				else:
+					self.log("⚠️ Invalid action")
+					return
+				self.log(f"📌 Entry ref price from {source}: {ref_price}")
+				self.log(f"🎯 TP: {tp_price} | 🛡️ SL: {sl_price}")
+				self.current_sl_price = sl_price
+				entry_order = MarketOrder(action, quantity)
+				entry_order.transmit = False
+				self.ib.placeOrder(contract, entry_order)
+				# Ensure entry has an orderId before creating children (defensive for adapters/mocks)
+				for _ in range(20):  # ~2s max
+					if getattr(entry_order, 'orderId', None) is not None:
+						break
+					self.ib.sleep(0.1)
+				entry_id = getattr(entry_order, 'orderId', None)
+				if entry_id is None:
+					self.log("❌ Entry orderId not assigned — cancelling entry to avoid naked order")
+					try:
+						self.ib.cancelOrder(entry_order)
+					except Exception:
+						pass
+					return
+
+				sl_order = StopOrder(exit_action, quantity, sl_price)
+				sl_order.transmit = False
+				sl_order.parentId = entry_id
+				try:
+					self.ib.placeOrder(contract, sl_order)
+					self.log(f"📝 SL child placed: orderId={getattr(sl_order, 'orderId', None)}, parentId={getattr(sl_order, 'parentId', None)}, price={sl_price}")
+				except Exception as e:
+					self.log(f"❌ Failed to place SL child: {e} — cancelling entry")
+					try:
+						self.ib.cancelOrder(entry_order)
+					except Exception:
+						pass
+					return
+
+				tp_order = LimitOrder(exit_action, quantity, tp_price)
+				tp_order.transmit = True
+				tp_order.parentId = entry_id
+				try:
+					self.ib.placeOrder(contract, tp_order)
+					self.log(f"📝 TP child placed: orderId={getattr(tp_order, 'orderId', None)}, parentId={getattr(tp_order, 'parentId', None)}, price={tp_price}")
+				except Exception as e:
+					self.log(f"❌ Failed to place TP child: {e} — cancelling entry & SL")
+					try:
+						self.ib.cancelOrder(entry_order)
+						self.ib.cancelOrder(sl_order)
+					except Exception:
+						pass
+					return
+
+				# Verify children exist and reference the parent; otherwise cancel to prevent a naked entry
+				children_ok = (
+					getattr(sl_order, 'orderId', None) is not None and
+					getattr(tp_order, 'orderId', None) is not None and
+					getattr(sl_order, 'parentId', None) == entry_id and
+					getattr(tp_order, 'parentId', None) == entry_id
+				)
+				self.log(f"📝 Bracket verification: entry_id={entry_id}, sl_orderId={getattr(sl_order, 'orderId', None)}, tp_orderId={getattr(tp_order, 'orderId', None)}, sl_parentId={getattr(sl_order, 'parentId', None)}, tp_parentId={getattr(tp_order, 'parentId', None)}")
+				if not children_ok:
+					self.log("❌ Bracket verification failed — cancelling all")
+					try:
+						self.ib.cancelOrder(entry_order)
+						self.ib.cancelOrder(sl_order)
+						self.ib.cancelOrder(tp_order)
+					except Exception:
+						pass
+					return
+
+				self.log(f"✅ Bracket order sent for {contract.symbol} ({action})")
+				# Post-placement verification: check all bracket orders are live in IB
+				try:
+					active_orders = [o for o in self.ib.orders() if getattr(o, 'orderId', None) in {entry_id, getattr(sl_order, 'orderId', None), getattr(tp_order, 'orderId', None)}]
+					if len(active_orders) < 3:
+						self.log(f"⚠️ Post-placement check: Only {len(active_orders)} of 3 bracket orders are active in IB! orderIds={[(getattr(o, 'orderId', None), getattr(o, 'parentId', None)) for o in active_orders]}")
+				except Exception as e:
+					self.log(f"⚠️ Post-placement bracket check error: {e}")
+				# Track orders and IDs for legacy-style monitoring (after verification)
+				self._last_entry_order = entry_order
+				self._last_sl_order = sl_order
+				self._last_tp_order = tp_order
+				self._last_entry_id = entry_id
+				self._last_sl_id = getattr(sl_order, 'orderId', None)
+				self._last_tp_id = getattr(tp_order, 'orderId', None)
+				# Set direction & track entry context for exit PnL & ES logging
+				self.current_direction = 'LONG' if action.upper() == 'BUY' else 'SHORT'
+				self.entry_ref_price = ref_price
+				self.entry_action = action.upper()
+				self.entry_qty_sign = 1 if self.entry_action == 'BUY' else -1
+				self.current_tp_price = tp_price
+				# Wait for IBKR order status confirmation before advancing lifecycle/logging
+				confirmed = False
+				try:
+					# Wait up to 10 seconds for any of the bracket orders to reach 'Submitted' or 'Filled' status
+					for _ in range(20):
+						trades = self.ib.trades()
+						for tr in trades:
+							order = getattr(tr, 'order', None)
+							status = getattr(tr, 'orderStatus', None)
+							oid = getattr(order, 'orderId', None)
+							st = (getattr(status, 'status', '') or '').lower()
+							if oid in {entry_id, getattr(sl_order, 'orderId', None), getattr(tp_order, 'orderId', None)} and st in ('submitted', 'filled'):
+								confirmed = True
+								break
+						if confirmed:
+							break
+						self.ib.sleep(0.5)
+				except Exception as e:
+					self.log(f"⚠️ Error while waiting for IBKR order status confirmation: {e}")
+				if confirmed:
+					self._set_trade_phase('ACTIVE', reason=f'Bracket confirmed by IBKR (attempt {attempt})')
+					try:
+						self._log_trade_enter_to_es(price=ref_price, action=self.entry_action, quantity_sign=self.entry_qty_sign)
+					except Exception:
+						pass
+					return
+				else:
+					self.log(f"⚠️ IBKR did not confirm bracket order as 'Submitted' or 'Filled' within timeout — attempt {attempt} of {max_retries}")
+					# Cancel all orders before retrying
+					try:
+						self.ib.cancelOrder(entry_order)
+						self.ib.cancelOrder(sl_order)
+						self.ib.cancelOrder(tp_order)
+					except Exception:
+						pass
+			except Exception as e:
+				self.log(f"❌ Error in place_bracket_order (attempt {attempt}): {e}")
+				continue
+		# If all retries fail, leave lifecycle in BRACKET_SENT and log warning
+		self.log(f"❌ All {max_retries} attempts to confirm bracket order failed — trade lifecycle remains pending.")
+		self._set_trade_phase('BRACKET_SENT', reason=f'Bracket not confirmed by IBKR after {max_retries} attempts')
+		# Log to ES trades index: bracket_failed event
 		try:
-			# Respect legacy cutoff: block new orders after cutoff time
-			if getattr(self, 'block_new_orders', False):
-				self.log("⛔ New orders blocked after cutoff time — skipping order placement")
-				return
-			# Mark phase if we were in SIGNAL_PENDING
-			if self.trade_phase == 'SIGNAL_PENDING':
-				self._set_trade_phase('BRACKET_SENT', reason='Sending bracket order')
-			contract = self.contract
-			tick = self.ib.reqMktData(contract, snapshot=True)
-			# Wait briefly for fields to populate
-			ref_price = None
-			source = None
-			for _ in range(10):  # ~2s total
-				self.ib.sleep(0.2)
-				source, ref_price = self._pick_price(tick)
-				if source is not None:
-					break
-			if source is None:
-				self.log("⚠️ No valid price — skipping order")
-				return
-			if action.upper() == 'BUY':
-				tp_price = round(ref_price + tick_size * tp_ticks_long, 2)
-				sl_price = round(ref_price - tick_size * sl_ticks, 2)
-				exit_action = 'SELL'
-			elif action.upper() == 'SELL':
-				tp_price = round(ref_price - tick_size * tp_ticks_short, 2)
-				sl_price = round(ref_price + tick_size * sl_ticks, 2)
-				exit_action = 'BUY'
-			else:
-				self.log("⚠️ Invalid action")
-				return
-			self.log(f"📌 Entry ref price from {source}: {ref_price}")
-			self.log(f"🎯 TP: {tp_price} | 🛡️ SL: {sl_price}")
-			self.current_sl_price = sl_price
-			entry_order = MarketOrder(action, quantity)
-			entry_order.transmit = False
-			self.ib.placeOrder(contract, entry_order)
-			# Ensure entry has an orderId before creating children (defensive for adapters/mocks)
-			for _ in range(20):  # ~2s max
-				if getattr(entry_order, 'orderId', None) is not None:
-					break
-				self.ib.sleep(0.1)
-			entry_id = getattr(entry_order, 'orderId', None)
-			if entry_id is None:
-				self.log("❌ Entry orderId not assigned — cancelling entry to avoid naked order")
-				try:
-					self.ib.cancelOrder(entry_order)
-				except Exception:
-					pass
-				return
-
-			sl_order = StopOrder(exit_action, quantity, sl_price)
-			sl_order.transmit = False
-			sl_order.parentId = entry_id
-			try:
-				self.ib.placeOrder(contract, sl_order)
-				self.log(f"📝 SL child placed: orderId={getattr(sl_order, 'orderId', None)}, parentId={getattr(sl_order, 'parentId', None)}, price={sl_price}")
-			except Exception as e:
-				self.log(f"❌ Failed to place SL child: {e} — cancelling entry")
-				try:
-					self.ib.cancelOrder(entry_order)
-				except Exception:
-					pass
-				return
-
-			tp_order = LimitOrder(exit_action, quantity, tp_price)
-			tp_order.transmit = True
-			tp_order.parentId = entry_id
-			try:
-				self.ib.placeOrder(contract, tp_order)
-				self.log(f"📝 TP child placed: orderId={getattr(tp_order, 'orderId', None)}, parentId={getattr(tp_order, 'parentId', None)}, price={tp_price}")
-			except Exception as e:
-				self.log(f"❌ Failed to place TP child: {e} — cancelling entry & SL")
-				try:
-					self.ib.cancelOrder(entry_order)
-					self.ib.cancelOrder(sl_order)
-				except Exception:
-					pass
-				return
-
-			# Verify children exist and reference the parent; otherwise cancel to prevent a naked entry
-			children_ok = (
-				getattr(sl_order, 'orderId', None) is not None and
-				getattr(tp_order, 'orderId', None) is not None and
-				getattr(sl_order, 'parentId', None) == entry_id and
-				getattr(tp_order, 'parentId', None) == entry_id
-			)
-			self.log(f"📝 Bracket verification: entry_id={entry_id}, sl_orderId={getattr(sl_order, 'orderId', None)}, tp_orderId={getattr(tp_order, 'orderId', None)}, sl_parentId={getattr(sl_order, 'parentId', None)}, tp_parentId={getattr(tp_order, 'parentId', None)}")
-			if not children_ok:
-				self.log("❌ Bracket verification failed — cancelling all")
-				try:
-					self.ib.cancelOrder(entry_order)
-					self.ib.cancelOrder(sl_order)
-					self.ib.cancelOrder(tp_order)
-				except Exception:
-					pass
-				return
-
-			self.log(f"✅ Bracket order sent for {contract.symbol} ({action})")
-			# Post-placement verification: check all bracket orders are live in IB
-			try:
-				active_orders = [o for o in self.ib.orders() if getattr(o, 'orderId', None) in {entry_id, getattr(sl_order, 'orderId', None), getattr(tp_order, 'orderId', None)}]
-				if len(active_orders) < 3:
-					self.log(f"⚠️ Post-placement check: Only {len(active_orders)} of 3 bracket orders are active in IB! orderIds={[(getattr(o, 'orderId', None), getattr(o, 'parentId', None)) for o in active_orders]}")
-			except Exception as e:
-				self.log(f"⚠️ Post-placement bracket check error: {e}")
-			# Track orders and IDs for legacy-style monitoring (after verification)
-			self._last_entry_order = entry_order
-			self._last_sl_order = sl_order
-			self._last_tp_order = tp_order
-			self._last_entry_id = entry_id
-			self._last_sl_id = getattr(sl_order, 'orderId', None)
-			self._last_tp_id = getattr(tp_order, 'orderId', None)
-			# Set direction & move to ACTIVE (bracket transmitted)
-			self.current_direction = 'LONG' if action.upper() == 'BUY' else 'SHORT'
-			# Track entry context for exit PnL & ES logging
-			self.entry_ref_price = ref_price
-			self.entry_action = action.upper()
-			self.entry_qty_sign = 1 if self.entry_action == 'BUY' else -1
-			self.current_tp_price = tp_price
-			self._set_trade_phase('ACTIVE', reason='Bracket transmitted')
-			# ES logging for entry — relies on EMAs computed earlier in the tick
-			try:
-				self._log_trade_enter_to_es(price=ref_price, action=self.entry_action, quantity_sign=self.entry_qty_sign)
-			except Exception:
-				pass
-		except Exception as e:
-			self.log(f"❌ Error in place_bracket_order: {e}")
-			return
+			doc = {
+				"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+				"algo": type(self).__name__,
+				"contract": self._collect_contract_for_es(),
+				"event": "bracket_failed",
+				"reason": f"Bracket not confirmed by IBKR after {max_retries} attempts",
+				"ref_price": self.entry_ref_price,
+				"action": self.entry_action,
+				"quantity_sign": self.entry_qty_sign,
+			}
+			import es_client as _es
+			_es.index_doc(self._es_client, self._es_trades_index, doc)
+		except Exception:
+			pass
 
 	def _monitor_stop(self, positions):
 		contract = self.contract
@@ -1381,6 +1451,51 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				position_side == 'LONG' and market_price <= self.current_sl_price or
 				position_side == 'SHORT' and market_price >= self.current_sl_price
 			)
+			# Block all new trades if in BRACKET_SENT state
+			if self.trade_phase == 'BRACKET_SENT':
+				# If exit condition is met (SL breach), exit bracket_sent state
+				if sl_hit:
+					self.log(f"⚠️ SL breach detected @ {market_price} in BRACKET_SENT state — exiting to IDLE. No trade was placed.")
+					# ES logging for bracket_sent_exit event (not a trade exit)
+					try:
+						if isinstance(self.entry_ref_price, (int, float)) and isinstance(market_price, (int, float)) and isinstance(self.entry_qty_sign, int):
+							pnl = (market_price - self.entry_ref_price) * self.entry_qty_sign
+							entry_act = getattr(self, 'entry_action', None)
+							if entry_act in ('BUY', 'SELL'):
+								exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'
+							else:
+								exit_action = 'SELL' if (self.entry_qty_sign or 1) > 0 else 'BUY'
+							doc = {
+								"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+								"algo": type(self).__name__,
+								"contract": self._collect_contract_for_es(),
+								"event": "bracket_sent_exit",
+								"reason": "SL breach in BRACKET_SENT state, no trade placed",
+								"ref_price": self.entry_ref_price,
+								"exit_price": market_price,
+								"action": self.entry_action,
+								"exit_action": exit_action,
+								"quantity_sign": self.entry_qty_sign,
+								"pnl": pnl,
+							}
+							import es_client as _es
+							_es.index_doc(self._es_client, self._es_trades_index, doc)
+					except Exception:
+						pass
+					self.current_sl_price = None
+					# Clear tracked bracket state
+					self._last_entry_order = None
+					self._last_sl_order = None
+					self._last_tp_order = None
+					self._last_entry_id = None
+					self._last_sl_id = None
+					self._last_tp_id = None
+					self.current_direction = None
+					self._set_trade_phase('IDLE', reason='Exited BRACKET_SENT after SL breach, no trade placed')
+					return None
+				# If not breached, just block trades and do nothing else
+				return self.current_sl_price
+			# Normal logic if not in BRACKET_SENT
 			if sl_hit:
 				self._set_trade_phase('EXITING', reason=f'SL breach @ {market_price}')
 				self.log(f"⚠️ Stop breached @ {market_price} vs SL {self.current_sl_price}")
@@ -1399,9 +1514,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				# ES logging for exit (SL breach)
 				try:
 					if isinstance(self.entry_ref_price, (int, float)) and isinstance(market_price, (int, float)) and isinstance(self.entry_qty_sign, int):
-						# Do not recalculate EMAs here; EMAs are computed once per tick in tick_prologue
 						pnl = (market_price - self.entry_ref_price) * self.entry_qty_sign
-						# For exits, log the actual closing side: opposite of entry if known
 						entry_act = getattr(self, 'entry_action', None)
 						if entry_act in ('BUY', 'SELL'):
 							exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'

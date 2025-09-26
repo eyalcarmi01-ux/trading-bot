@@ -1,2 +1,3 @@
+logs/
 # Ignore duplicate root-level test files
 /test_*.py
