@@ -589,17 +589,22 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				self.multi_ema_spans = (10, 20, 32, 50, 100, 200)
 		except Exception:
 			self.multi_ema_spans = (10, 20, 32, 50, 100, 200)
-		# Generic seeding configuration (applies to all algorithms uniformly)
-		self._auto_seed_enabled = bool(auto_seed_enabled)
-		# Number of 1-min bars desired; used when minutes is not provided explicitly
-		self._auto_seed_bars = int(auto_seed_bars) if isinstance(auto_seed_bars, int) and auto_seed_bars > 0 else 500
-		# Minutes window for 1-min bars. Defaults to same as bars if invalid
-		try:
-			self._auto_seed_minutes = int(auto_seed_minutes)
-			if self._auto_seed_minutes <= 0:
-				raise ValueError
-		except Exception:
-			self._auto_seed_minutes = self._auto_seed_bars
+		# Subscribe to market data and update price history on tick events
+		self._subscribe_market_data()
+	def _subscribe_market_data(self):
+		"""Subscribe to live market data for the contract and update price history on tick events."""
+		if hasattr(self, 'ib') and hasattr(self, 'contract') and self.ib and self.contract:
+			self._md_tick = self.ib.reqMktData(self.contract, '', False, False)
+			# Attach tickPrice event handler
+			def on_tick_price(tick, field, price, attribs):
+				# Only update for last price or close price
+				if field in (4, 7):  # 4=Last price, 7=Close price
+					try:
+						self._latest_market_price = price
+					except Exception:
+						pass
+			self.ib.pendingTickersEvent += on_tick_price
+		# Removed auto_seed_* assignments (not defined in constructor or used elsewhere)
 
 	def _configure_force_close(self, force_close):
 		"""Configure optional daily force-close time (hour, minute) or disable if None.
@@ -1789,9 +1794,14 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 
 	def _main_loop(self):
 		"""Primary infinite loop executing strategy ticks & housekeeping."""
+		import time as _time
 		while True:
 			try:
-				self.ib.sleep(getattr(self, 'CHECK_INTERVAL', 60))
+				now = self._now_in_tz()
+				# Calculate seconds until next round minute
+				sleep_seconds = 60 - now.second - now.microsecond / 1_000_000
+				if sleep_seconds > 0:
+					self.ib.sleep(sleep_seconds)
 				now = self._now_in_tz()
 				time_str = now.strftime('%H:%M:%S')
 				ctx = self._compute_time_context(now)
@@ -1898,6 +1908,12 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		self._set_trade_phase('IDLE', reason='Exception recovery')
 
 	def on_tick(self, time_str):
+		# Use the latest market price from tick event
+		price = getattr(self, '_latest_market_price', None)
+		if price is not None:
+			self.update_price_history(price)
+			self.prev_market_price = price
+		# ...existing code for subclass logic...
 		raise NotImplementedError("Subclasses must implement on_tick()")
 
 	def tick_prologue(
