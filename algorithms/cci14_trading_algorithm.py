@@ -52,6 +52,7 @@ class CCI14TradingAlgorithm(TradingAlgorithm):
 		return cci
 
 	def on_tick(self, time_str):
+		self.on_tick_common(time_str)
 		price = self.get_valid_price()
 		if price is None:
 			self.log(f"{time_str} ⚠️ Invalid price — skipping\n")

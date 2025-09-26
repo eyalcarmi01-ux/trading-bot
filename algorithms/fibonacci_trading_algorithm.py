@@ -183,6 +183,7 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 			return None, None
 
 	def on_tick(self, time_str):
+		self.on_tick_common(time_str)
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=False,

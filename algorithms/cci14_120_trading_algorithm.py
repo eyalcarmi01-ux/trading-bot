@@ -54,6 +54,7 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		return len(v) >= 3 and v[-3] >= 120 and v[-2] < 120 and v[-1] < v[-2]
 
 	def on_tick(self, time_str):
+		self.on_tick_common(time_str)
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=True,

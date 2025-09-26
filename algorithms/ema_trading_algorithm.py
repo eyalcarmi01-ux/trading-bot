@@ -40,6 +40,7 @@ class EMATradingAlgorithm(TradingAlgorithm):
 		# No extra per-tick diagnostics are emitted by this class anymore; rely on base logging
 
 	def on_tick(self, time_str):
+		self.on_tick_common(time_str)
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=True,

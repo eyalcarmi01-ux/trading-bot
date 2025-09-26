@@ -58,6 +58,7 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 	# CCI calculation moved to base class (calculate_and_log_cci)
 
 	def on_tick(self, time_str):
+		self.on_tick_common(time_str)
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=True,
@@ -92,8 +93,13 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		if self.signal_time is not None:
 			elapsed = (datetime.datetime.now() - self.signal_time).total_seconds()
 			if elapsed >= 180:
-				self.place_bracket_order(self.signal_action, self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
-				self.log(f"{time_str} ✅ Bracket sent — bot in active position\n")
+				import threading
+				def order_thread():
+					self.place_bracket_order(self.signal_action, self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+					self.log(f"{time_str} ✅ Bracket sent — bot in active position\n")
+				t = threading.Thread(target=order_thread, name="BracketOrderThread")
+				t.daemon = True
+				t.start()
 				self.signal_time = None
 				self.signal_action = None
 			else:

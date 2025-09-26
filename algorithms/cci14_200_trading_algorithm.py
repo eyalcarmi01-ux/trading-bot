@@ -57,6 +57,7 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
     # should_trade_now is provided by the base class and shared across all algorithms
 
     def on_tick(self, time_str: str):
+        self.on_tick_common(time_str)
         ctx = self.tick_prologue(
             time_str,
             update_ema=True,
