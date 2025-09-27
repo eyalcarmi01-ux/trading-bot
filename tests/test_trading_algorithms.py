@@ -12,7 +12,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         # Patch TradingAlgorithm base to use mock IB
         EMATradingAlgorithm.__bases__[0].ib = self.mock_ib
         FibonacciTradingAlgorithm.__bases__[0].ib = self.mock_ib
-    CCI14_Compare_TradingAlgorithm.__bases__[0].ib = self.mock_ib
+        CCI14_Compare_TradingAlgorithm.__bases__[0].ib = self.mock_ib
 
     def test_ema_on_tick(self):
         algo = EMATradingAlgorithm(
@@ -37,7 +37,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertIsInstance(algo.fib_retracements, list)
 
     def test_cci14_on_tick(self):
-    algo = CCI14_Compare_TradingAlgorithm(
+        algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
@@ -49,14 +49,14 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertIsInstance(algo.ema_fast, float)
 
     def test_cci14_not_enough_data_and_trim(self):
-    algo = CCI14_Compare_TradingAlgorithm(
+        algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
             ib=self.mock_ib
         )
-    # Keep history safely below period so CCI calculation is not performed
-    algo.price_history = [100.0] * (algo.CCI_PERIOD - 2)
+        # Keep history safely below period so CCI calculation is not performed
+        algo.price_history = [100.0] * (algo.CCI_PERIOD - 2)
         # Make get_valid_price return None to simulate missing tick; no price append, no CCI
         with patch.object(algo, 'get_valid_price', return_value=None):
             algo.on_tick('12:00:00')
@@ -65,7 +65,7 @@ class TestTradingAlgorithms(unittest.TestCase):
         self.assertEqual(len(algo.cci_values), 0)
 
     def test_cci14_reset_state(self):
-    algo = CCI14_Compare_TradingAlgorithm(
+        algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,

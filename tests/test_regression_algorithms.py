@@ -43,7 +43,7 @@ class TestAlgorithmRegression(unittest.TestCase):
         self.assertEqual(algo.last_signal, None)
 
     def test_cci14_state_and_order(self):
-    algo = CCI14_Compare_TradingAlgorithm(
+        algo = CCI14_Compare_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
@@ -62,7 +62,7 @@ class TestAlgorithmRegression(unittest.TestCase):
         self.assertIsNone(self.mock_ib.last_order)
 
     def test_cci14rev_long_short_conditions(self):
-    algo = CCI14_120_TradingAlgorithm(
+        algo = CCI14_120_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,
@@ -82,7 +82,7 @@ class TestAlgorithmRegression(unittest.TestCase):
         self.assertIsNone(self.mock_ib.last_order)
 
     def test_cci14rev_condition_boundaries(self):
-    algo = CCI14_120_TradingAlgorithm(
+        algo = CCI14_120_TradingAlgorithm(
             contract_params=dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD'),
             check_interval=60,
             initial_ema=100,

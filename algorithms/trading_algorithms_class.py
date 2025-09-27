@@ -607,6 +607,12 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 							self._latest_market_price = price
 						# Offload monitoring to a thread (stop and limit)
 						def monitor_orders_thread():
+							import asyncio
+							try:
+								asyncio.get_event_loop()
+							except RuntimeError:
+								loop = asyncio.new_event_loop()
+								asyncio.set_event_loop(loop)
 							try:
 								with self._lock:
 									# Stop monitoring
@@ -1284,6 +1290,13 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def place_bracket_order(self, action, quantity, tick_size, sl_ticks, tp_ticks_long, tp_ticks_short):
 		import threading
 		def _order_thread():
+			# Ensure asyncio event loop exists in this thread
+			import asyncio
+			try:
+				asyncio.get_event_loop()
+			except RuntimeError:
+				loop = asyncio.new_event_loop()
+				asyncio.set_event_loop(loop)
 			# Thread-safe gating for order placement
 			if not self.can_place_order():
 				self.log("🚫 Order placement blocked by gating (ORDER_PLACING or other condition)")
@@ -1466,13 +1479,6 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			except Exception:
 				pass
 			self._set_trade_phase('BRACKET_SENT', reason=f'Bracket not confirmed by IBKR after {max_retries} attempts')
-		# Thread creation (outside the thread function)
-		t = threading.Thread(target=_order_thread, name="BracketOrderThread")
-		t.daemon = True
-		t.start()
-		t = threading.Thread(target=_order_thread, name="BracketOrderThread")
-		t.daemon = True
-		t.start()
 
 	def _monitor_stop(self, positions):
 		contract = self.contract
@@ -1737,24 +1743,41 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			limit_price = self.intended_limit_price
 			market_price = getattr(self, '_latest_market_price', None)
 			if market_price is not None:
-				# For long positions, check if market price >= limit; for short, check <=
 				direction = getattr(self, 'entry_action', None)
-				if direction == 'BUY' and market_price >= limit_price:
-					self.log(f"Limit reached: {market_price} >= {limit_price} (long)")
-					self._handle_limit_reached(market_price)
-				elif direction == 'SELL' and market_price <= limit_price:
-					self.log(f"Limit reached: {market_price} <= {limit_price} (short)")
+				limit_hit = (direction == 'BUY' and market_price >= limit_price) or (direction == 'SELL' and market_price <= limit_price)
+				if limit_hit:
+					self.log(f"Limit reached: {market_price} {'>=' if direction == 'BUY' else '<='} {limit_price} ({'long' if direction == 'BUY' else 'short'})")
+					# ES logging for bracket_sent_exit event (not a trade exit)
+					try:
+						if isinstance(self.entry_ref_price, (int, float)) and isinstance(market_price, (int, float)) and isinstance(self.entry_qty_sign, int):
+							pnl = (market_price - self.entry_ref_price) * self.entry_qty_sign
+							entry_act = getattr(self, 'entry_action', None)
+							if entry_act in ('BUY', 'SELL'):
+								exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'
+							else:
+								exit_action = 'SELL' if (self.entry_qty_sign or 1) > 0 else 'BUY'
+							doc = {
+								"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+								"algo": type(self).__name__,
+								"contract": self._collect_contract_for_es(),
+								"event": "bracket_sent_exit",
+								"reason": "Limit detected in BRACKET_SENT state, no trade placed",
+								"ref_price": self.entry_ref_price,
+								"exit_price": market_price,
+								"action": self.entry_action,
+								"exit_action": exit_action,
+								"quantity_sign": self.entry_qty_sign,
+								"pnl": pnl,
+							}
+							import es_client as _es
+							_es.index_doc(self._es_client, self._es_trades_index, doc)
+					except Exception:
+						pass
 					self._handle_limit_reached(market_price)
 
 	def _handle_limit_reached(self, market_price):
 		"""Handle logic for exiting BRACKET_SENT when limit is reached."""
-		# Log to ES, update state, etc.
-		pnl = None
-		if isinstance(self.entry_ref_price, (int, float)) and isinstance(market_price, (int, float)) and isinstance(self.entry_qty_sign, int):
-			pnl = (market_price - self.entry_ref_price) * self.entry_qty_sign
-		entry_act = getattr(self, 'entry_action', None)
-		exit_action = 'SELL' if entry_act == 'BUY' else 'BUY'
-		self._log_trade_exit_to_es(price=market_price, action=exit_action, quantity_sign=self.entry_qty_sign or (1 if exit_action=='BUY' else -1), reason='LIMIT_reached', pnl=pnl)
+		# Only update state, do not log trade exit event if exiting BRACKET_SENT without a real trade
 		self.current_sl_price = None
 		self.intended_limit_price = None
 		self._set_trade_phase('CLOSED', reason='Manual limit close')

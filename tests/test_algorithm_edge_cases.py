@@ -16,13 +16,12 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14rev_invalid_price_handling(self):
         """Test CCI14Rev algorithm with invalid price data"""
-    algo = CCI14_120_TradingAlgorithm(
+        algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
             ib=self.mock_ib
         )
-        
         # Test with None price
         self.mock_ib.reqMktData = MagicMock(return_value=MagicMock(last=None, close=None, ask=None, bid=None))
         algo.on_tick("12:00:00")
@@ -30,13 +29,12 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14rev_nan_price_handling(self):
         """Test CCI14Rev algorithm with NaN price data"""
-    algo = CCI14_120_TradingAlgorithm(
+        algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
             ib=self.mock_ib
         )
-        
         # Test with NaN price
         self.mock_ib.reqMktData = MagicMock(return_value=MagicMock(last=math.nan, close=math.nan, ask=math.nan, bid=math.nan))
         algo.on_tick("12:00:00")
@@ -71,13 +69,12 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_cci14_algorithm_zero_deviation(self):
         """Test CCI14 algorithm with zero standard deviation"""
-    algo = CCI14_Compare_TradingAlgorithm(
+        algo = CCI14_Compare_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
             ib=self.mock_ib
         )
-        
         # Pre-fill with identical prices (zero deviation)
         algo.price_history = [100.0] * algo.CCI_PERIOD
         algo.on_tick("12:00:00")
@@ -106,21 +103,19 @@ class TestRefactoredAlgorithmEdgeCases(unittest.TestCase):
 
     def test_algorithm_state_consistency(self):
         """Test that algorithm states remain consistent"""
-    algo = CCI14_120_TradingAlgorithm(
+        algo = CCI14_120_TradingAlgorithm(
             contract_params={'symbol': 'TEST', 'exchange': 'SMART', 'currency': 'USD'},
             check_interval=60,
             initial_ema=100,
             ib=self.mock_ib
         )
-        
         # Process multiple ticks and verify state consistency
-    for i in range(10):
+        for i in range(10):
             price = 100 + i * 0.1
             self.mock_ib.reqMktData = MagicMock(return_value=MagicMock(last=price, close=price, ask=price, bid=price))
             algo.on_tick(f"12:00:{i:02d}")
-        
-    # State should be consistent (no exceptions thrown)
-    self.assertIsNotNone(algo.contract)
+        # State should be consistent (no exceptions thrown)
+        self.assertIsNotNone(algo.contract)
 
     def test_concurrent_algorithm_safety(self):
         """Test algorithm behavior under concurrent access"""

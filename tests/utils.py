@@ -1,8 +1,23 @@
 from unittest.mock import MagicMock
 import time
+from unittest.mock import MagicMock
+import time
 
 
 class MockIB:
+    class _Event:
+        def __init__(self):
+            self._handlers = []
+        def __iadd__(self, handler):
+            self._handlers.append(handler)
+            return self
+        def __isub__(self, handler):
+            self._handlers.remove(handler)
+            return self
+        def __call__(self, *args, **kwargs):
+            for handler in self._handlers:
+                handler(*args, **kwargs)
+
     def __init__(self):
         self._orders = []  # list of order objects
         self._positions = []
@@ -15,6 +30,7 @@ class MockIB:
         self._historical_overrides = {}
         # Trades list to emulate ib.trades()
         self._trades = []
+        self.pendingTickersEvent = self._Event()
 
     # --- IB-like methods used by tests/algorithms ---
     def connect(self, *a, **kw):
@@ -31,7 +47,7 @@ class MockIB:
         self.call_count += 1
         return [contract]
 
-    def reqMktData(self, contract, snapshot=True):
+    def reqMktData(self, contract, *args, **kwargs):
         # Track calls for performance tests
         self.call_count += 1
         self.call_times.append(time.time())
