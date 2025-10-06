@@ -1479,6 +1479,9 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			except Exception:
 				pass
 			self._set_trade_phase('BRACKET_SENT', reason=f'Bracket not confirmed by IBKR after {max_retries} attempts')
+		t = threading.Thread(target=_order_thread)
+		t.daemon = True
+		t.start()
 
 	def _monitor_stop(self, positions):
 		contract = self.contract
