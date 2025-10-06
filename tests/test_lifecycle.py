@@ -7,6 +7,34 @@ from tests.utils import MockIB, MockPosition
 
 class TestLifecyclePhases(unittest.TestCase):
     def setUp(self):
+        # Monkeypatch order classes for reliable tracking
+        class MarketOrder:
+            def __init__(self, action, quantity):
+                self.action = action
+                self.quantity = quantity
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        class LimitOrder:
+            def __init__(self, action, quantity, price):
+                self.action = action
+                self.quantity = quantity
+                self.price = price
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        class StopOrder:
+            def __init__(self, action, quantity, price):
+                self.action = action
+                self.quantity = quantity
+                self.price = price
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        import sys
+        sys.modules[__name__].MarketOrder = MarketOrder
+        sys.modules[__name__].LimitOrder = LimitOrder
+        sys.modules[__name__].StopOrder = StopOrder
         self.ib = MockIB()
         params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
         self.algo = TradingAlgorithm(contract_params=params, ib=self.ib)

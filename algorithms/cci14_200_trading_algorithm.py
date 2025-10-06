@@ -91,7 +91,7 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
             )
             self.log(f"{time_str} ✅ Bracket sent ({action}) on CCI14 ±200 threshold\n")
         else:
-            self.log(f"{time_str} 🔍 No trade signal at the moment.")
+            self.log(f"{time_str} 🔍 No trade signal at the moment.\n")
             if active:
                 self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
 

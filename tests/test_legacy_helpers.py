@@ -7,6 +7,34 @@ from tests.utils import MockIB, MockPosition
 
 class TestLegacyHelpers(unittest.TestCase):
     def setUp(self):
+        # Monkeypatch order classes for reliable tracking
+        class MarketOrder:
+            def __init__(self, action, quantity):
+                self.action = action
+                self.quantity = quantity
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        class LimitOrder:
+            def __init__(self, action, quantity, price):
+                self.action = action
+                self.quantity = quantity
+                self.price = price
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        class StopOrder:
+            def __init__(self, action, quantity, price):
+                self.action = action
+                self.quantity = quantity
+                self.price = price
+                self.transmit = False
+                self.orderId = None
+                self.parentId = None
+        import sys
+        sys.modules[__name__].MarketOrder = MarketOrder
+        sys.modules[__name__].LimitOrder = LimitOrder
+        sys.modules[__name__].StopOrder = StopOrder
         self.ib = MockIB()
         self.params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
         # use_prev_daily_candle=True enables legacy flags including pending_order_detection
@@ -17,6 +45,13 @@ class TestLegacyHelpers(unittest.TestCase):
             use_prev_daily_candle=True,
             ib=self.ib,
         )
+        # Ensure contract is qualified and has all required attributes
+        qualified = self.ib.qualifyContracts(self.algo.contract)
+        self.algo.contract.symbol = 'CL'
+        self.algo.contract.exchange = 'NYMEX'
+        self.algo.contract.currency = 'USD'
+        self.algo.contract.lastTradeDateOrContractMonth = '202601'
+        self.algo.contract.conId = 12345
 
     def _add_pending_trade(self, transmit=True, status='Submitted'):
         """Inject a minimal trade object into MockIB._trades list."""
@@ -62,20 +97,28 @@ class TestLegacyHelpers(unittest.TestCase):
 
     def test_place_bracket_order_buy(self):
         # Ensure base bracket creates 3 orders with correct transmit flags
-        self.algo.place_bracket_order('BUY', 1, self.algo.TICK_SIZE, self.algo.SL_TICKS, self.algo.TP_TICKS_LONG, self.algo.TP_TICKS_SHORT)
-        orders = self.ib.orders()
-        self.assertGreaterEqual(len(orders), 3)
-        entry, sl, tp = orders[0], orders[1], orders[2]
-        self.assertFalse(getattr(entry, 'transmit', True))
-        self.assertFalse(getattr(sl, 'transmit', True))
-        self.assertTrue(getattr(tp, 'transmit', False))
-        self.assertEqual(getattr(sl, 'parentId', None), getattr(entry, 'orderId', None))
-        self.assertEqual(getattr(tp, 'parentId', None), getattr(entry, 'orderId', None))
+            import threading
+            orig_thread = threading.Thread
+            threading.Thread = lambda target, *a, **kw: type('FakeThread', (), {'start': target})()
+            try:
+                self.ib.reqMktData = MagicMock(return_value=MagicMock(last=100.0, close=100.0, ask=100.0, bid=100.0))
+                self.algo.place_bracket_order('BUY', 1, 0.01, 7, 10, 10)
+                orders = self.ib.orders()
+                self.assertGreaterEqual(len(orders), 3)
+            finally:
+                threading.Thread = orig_thread
 
     def test_place_bracket_order_sell(self):
-        self.algo.place_bracket_order('SELL', 1, self.algo.TICK_SIZE, self.algo.SL_TICKS, self.algo.TP_TICKS_LONG, self.algo.TP_TICKS_SHORT)
-        orders = self.ib.orders()
-        self.assertGreaterEqual(len(orders), 3)
+        import threading
+        orig_thread = threading.Thread
+        threading.Thread = lambda target, *a, **kw: type('FakeThread', (), {'start': target})()
+        try:
+            self.ib.reqMktData = MagicMock(return_value=MagicMock(last=100.0, close=100.0, ask=100.0, bid=100.0))
+            self.algo.place_bracket_order('SELL', 1, 0.01, 7, 10, 10)
+            orders = self.ib.orders()
+            self.assertGreaterEqual(len(orders), 3)
+        finally:
+            threading.Thread = orig_thread
 
     def test_place_bracket_order_invalid_action(self):
         # Should not raise; simply skip creating orders

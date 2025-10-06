@@ -56,6 +56,7 @@ class CCI14_200_TradingAlgorithm(CCI14_Compare_TradingAlgorithm):
         return start_t <= now_t <= end_t
 
     def on_tick(self, time_str: str):
+        self.log_checking_trade_conditions(time_str)
         self.on_tick_common(time_str)
         # Gate by trading window
         if not self.should_trade_now():

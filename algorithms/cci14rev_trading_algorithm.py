@@ -17,6 +17,7 @@ raise ImportError("cci14rev_trading_algorithm removed. Import CCI14_120_TradingA
 		return len(v) >= 3 and v[-3] >= 120 and v[-2] < 120 and v[-1] < v[-2]
 
 	def on_tick(self, time_str):
+		self.log_checking_trade_conditions(time_str)
 		self.on_tick_common(time_str)
 		price = self.get_valid_price()
 		if price is None:

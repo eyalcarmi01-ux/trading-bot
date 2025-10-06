@@ -49,27 +49,39 @@ class TestCCI14_200_TradingAlgorithm(unittest.TestCase):
 
     @patch('algorithms.trading_algorithms_class.datetime')
     def test_threshold_sell_triggers_bracket(self, mock_dt):
-        mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
-        mock_dt.datetime.strftime = datetime.datetime.strftime
-        mock_dt.time = datetime.time
-        mock_dt.timedelta = datetime.timedelta
-        base = [100 + i for i in range(20)]
-        self.algo.price_history = base[-14:]
-        with patch.object(self.algo, 'calculate_and_log_cci', return_value=250.0):
-            self.algo.on_tick('12:00:00')
-        self.assertGreaterEqual(len(self.ib.orders()), 3)
+        import threading
+        orig_thread = threading.Thread
+        threading.Thread = lambda target, *a, **kw: type('FakeThread', (), {'start': target})()
+        try:
+            mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
+            mock_dt.datetime.strftime = datetime.datetime.strftime
+            mock_dt.time = datetime.time
+            mock_dt.timedelta = datetime.timedelta
+            base = [100 + i for i in range(20)]
+            self.algo.price_history = base[-14:]
+            with patch.object(self.algo, 'calculate_and_log_cci', return_value=250.0):
+                self.algo.on_tick('12:00:00')
+            self.assertGreaterEqual(len(self.ib.orders()), 3)
+        finally:
+            threading.Thread = orig_thread
         self.assertIsNotNone(self.ib.last_order)
 
     @patch('algorithms.trading_algorithms_class.datetime')
     def test_threshold_buy_triggers_bracket(self, mock_dt):
-        mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
-        mock_dt.datetime.strftime = datetime.datetime.strftime
-        mock_dt.time = datetime.time
-        mock_dt.timedelta = datetime.timedelta
-        self.algo.price_history = [100] * 14
-        with patch.object(self.algo, 'calculate_and_log_cci', return_value=-250.0):
-            self.algo.on_tick('12:00:00')
-        self.assertGreaterEqual(len(self.ib.orders()), 3)
+        import threading
+        orig_thread = threading.Thread
+        threading.Thread = lambda target, *a, **kw: type('FakeThread', (), {'start': target})()
+        try:
+            mock_dt.datetime.now.return_value = datetime.datetime(2025, 1, 1, 12, 0, tzinfo=datetime.timezone.utc)
+            mock_dt.datetime.strftime = datetime.datetime.strftime
+            mock_dt.time = datetime.time
+            mock_dt.timedelta = datetime.timedelta
+            self.algo.price_history = [100] * 14
+            with patch.object(self.algo, 'calculate_and_log_cci', return_value=-250.0):
+                self.algo.on_tick('12:00:00')
+            self.assertGreaterEqual(len(self.ib.orders()), 3)
+        finally:
+            threading.Thread = orig_thread
 
     @patch('algorithms.trading_algorithms_class.datetime')
     def test_no_trade_when_outside_window(self, mock_dt):
