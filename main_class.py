@@ -13,10 +13,10 @@ from algorithms.trading_algorithms_class import TradingAlgorithm
 
 
 # Example contract parameters (customize as needed for each algo)
-ema_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202601', exchange='NYMEX', currency='USD')
-fib_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202602', exchange='NYMEX', currency='USD')
+ema_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202604', exchange='NYMEX', currency='USD')
+fib_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', exchange='NYMEX', currency='USD')
 # Use distinct contracts for each CCI algorithm
-cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', exchange='NYMEX', currency='USD')
+cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202602', exchange='NYMEX', currency='USD')
 cci14_120_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202511', exchange='NYMEX', currency='USD')
 cci14_200_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202512', exchange='NYMEX', currency='USD')
 

@@ -23,9 +23,9 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		self.K_FAST = 2 / (self.EMA_FAST_PERIOD + 1)
 		self.K_SLOW = 2 / (self.EMA_SLOW_PERIOD + 1)
 		self.TICK_SIZE = 0.01
-		self.SL_TICKS = 7
-		self.TP_TICKS_LONG = 10
-		self.TP_TICKS_SHORT = 10
+		self.SL_TICKS = 18
+		self.TP_TICKS_LONG = 28
+		self.TP_TICKS_SHORT = 32
 		self.QUANTITY = 1
 		self.price_history = []
 		self.cci_values = []

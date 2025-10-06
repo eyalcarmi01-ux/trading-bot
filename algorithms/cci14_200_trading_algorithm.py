@@ -34,9 +34,9 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
         self.CCI_PERIOD = 14
         # Trade parameters (kept consistent with legacy behavior)
         self.TICK_SIZE = 0.01
-        self.SL_TICKS = 7
-        self.TP_TICKS_LONG = 10
-        self.TP_TICKS_SHORT = 10
+        self.SL_TICKS = 20
+        self.TP_TICKS_LONG = 60
+        self.TP_TICKS_SHORT = 60
         self.QUANTITY = 1
         # State containers
         self.price_history = []

@@ -416,10 +416,13 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		# Allow proceeding for injected mock IB objects (tests) even if not connected.
 		if getattr(self, 'ib', None) is None:
 			self.log("⚠️ get_valid_price called with no IB instance")
+			print(f"[DIAG] IB instance is None in get_valid_price")
 			return None
 		if not self.ib.isConnected():
 			# Heuristic: if this is a mock (has call_count attribute), continue anyway; real IB likely fails safely.
 			if not hasattr(self.ib, 'call_count'):
+				client_id = getattr(self.ib, 'clientId', '?')
+				print(f"[DIAG] get_valid_price: IB not connected | IB={self.ib} | clientId={client_id} | type={type(self.ib)}")
 				self.log("⚠️ get_valid_price called while not connected")
 				return None
 		# Testing accommodation: if the cached streaming tick is a MagicMock (unit tests monkeypatch reqMktData
@@ -511,9 +514,10 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				self.prev_market_price = self.price_history[-1]
 		except Exception:
 			pass
-		self.price_history.append(price)
-		if len(self.price_history) > maxlen:
-			self.price_history = self.price_history[-maxlen:]
+		if not self.price_history or price != self.price_history[-1]:
+			self.price_history.append(price)
+			if len(self.price_history) > maxlen:
+				self.price_history = self.price_history[-maxlen:]
 
 	def has_active_position(self):
 		"""Return True if there is an active position OR a working transmitted order for this contract.
@@ -2026,6 +2030,11 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		if price is not None:
 			self.update_price_history(price)
 			self.prev_market_price = price
+		# Monitor stop-loss for all strategies
+		try:
+			self._monitor_stop(self.ib.positions())
+		except Exception as e:
+			self.log_exception(e, context=f"on_tick_common/monitor_stop {time_str}")
 
 	def can_place_order(self):
 		"""Return True if all gating conditions are met for order placement."""
@@ -2194,11 +2203,17 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				return 0
 			added = 0
 			if extend and self.price_history:
-				self.price_history.extend(closes[-bars_needed:])
-				added = len(closes[-bars_needed:])
+				for close in closes[-bars_needed:]:
+					if not self.price_history or close != self.price_history[-1]:
+						self.price_history.append(close)
+				added = len(self.price_history)
 			else:
 				# Assign up to cap; if already have data, prefer assign when not extend
-				self.price_history = closes[-max(min(cap, len(closes)), bars_needed):]
+				filtered = []
+				for close in closes[-max(min(cap, len(closes)), bars_needed):]:
+					if not filtered or close != filtered[-1]:
+						filtered.append(close)
+				self.price_history = filtered
 				added = len(self.price_history)
 			# Enforce cap
 			if len(self.price_history) > cap:
