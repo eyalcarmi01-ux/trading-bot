@@ -19,6 +19,10 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
         check_interval,
         initial_ema,
         *,
+        tick_size: float = 0.01,
+        sl_ticks: int = 20,
+        tp_ticks_long: int = 60,
+        tp_ticks_short: int = 60,
         trade_timezone: str = "Asia/Jerusalem",
         trade_start: Optional[Tuple[int, int]] = (8, 0),
         trade_end: Optional[Tuple[int, int]] = (23, 0),
@@ -33,10 +37,10 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
         # Core indicator config
         self.CCI_PERIOD = 14
         # Trade parameters (kept consistent with legacy behavior)
-        self.TICK_SIZE = 0.01
-        self.SL_TICKS = 20
-        self.TP_TICKS_LONG = 60
-        self.TP_TICKS_SHORT = 60
+        self.TICK_SIZE = tick_size
+        self.SL_TICKS = sl_ticks
+        self.TP_TICKS_LONG = tp_ticks_long
+        self.TP_TICKS_SHORT = tp_ticks_short
         self.QUANTITY = 1
         # State containers
         self.price_history = []

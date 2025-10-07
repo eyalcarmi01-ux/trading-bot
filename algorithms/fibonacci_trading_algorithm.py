@@ -3,7 +3,7 @@ import datetime
 
 
 class FibonacciTradingAlgorithm(TradingAlgorithm):
-	def __init__(self, contract_params, check_interval, fib_levels, ib=None, use_prev_daily_candle=False, ma120_manual_override=None, **kwargs):
+	def __init__(self, contract_params, check_interval, fib_levels, ib=None, tick_size: float = 0.01, sl_ticks: int = 17, tp_ticks_long: int = 28, tp_ticks_short: int = 35, use_prev_daily_candle=False, ma120_manual_override=None, **kwargs):
 		"""
 		client_id (int): Pass as a kwarg to ensure unique IB connection per instance.
 		ib: Pass a mock IB instance for testing.
@@ -18,10 +18,10 @@ class FibonacciTradingAlgorithm(TradingAlgorithm):
 		self.last_low = None
 		self.last_signal = None
 		# Order params
-		self.TICK_SIZE = 0.01
-		self.SL_TICKS = 17
-		self.TP_TICKS_LONG = 28
-		self.TP_TICKS_SHORT = 35
+		self.TICK_SIZE = tick_size
+		self.SL_TICKS = sl_ticks
+		self.TP_TICKS_LONG = tp_ticks_long
+		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
 		# Computed levels for session-mode
 		self.fib_retracements = []

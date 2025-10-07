@@ -19,7 +19,7 @@ fib_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', e
 cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202602', exchange='NYMEX', currency='USD')
 cci14_120_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202511', exchange='NYMEX', currency='USD')
 cci14_200_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202512', exchange='NYMEX', currency='USD')
-
+nasdaq_cci14_compare_contract_params = dict(symbol='NQ', lastTradeDateOrContractMonth='202512', exchange='CME', currency='USD')
 
 
 FORCE_CLOSE_TIME = (22, 50)  # Daily force-close (HH, MM) applied to all algorithms
@@ -59,6 +59,21 @@ def instantiate_algorithms():
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
+    nasdaq_cci14_compare_algo = CCI14_Compare_TradingAlgorithm(
+        contract_params=nasdaq_cci14_compare_contract_params,
+        client_id=23,
+        check_interval=60,
+        initial_ema=25000,
+        tick_size=0.25,
+        sl_ticks=55,
+        tp_ticks_long=200,
+        tp_ticks_short=200,
+        multi_ema_diagnostics=True,
+        multi_ema_bootstrap=True,
+        test_order_enabled=True,
+        defer_connection=True,
+        force_close=FORCE_CLOSE_TIME,
+    )
     cci14_120_algo = CCI14_120_TradingAlgorithm(
         contract_params=cci14_120_contract_params,
         client_id=20,
@@ -74,6 +89,9 @@ def instantiate_algorithms():
         client_id=21,
         check_interval=60,
         initial_ema=80,
+        sl_ticks=20,            # You can set different values here per instance
+        tp_ticks_long=60,       # You can set different values here per instance
+        tp_ticks_short=60,      # You can set different values here per instance
         trade_timezone="Asia/Jerusalem",
         trade_start=(8, 0),
         trade_end=(23, 0),  # Extended end of trading window to 23:00
@@ -86,6 +104,7 @@ def instantiate_algorithms():
         ema_algo,
         fib_algo,
         cci14_compare_algo,
+        nasdaq_cci14_compare_algo,
         cci14_120_algo,
         cci14_200_algo,
     ]

@@ -3,7 +3,7 @@ from statistics import stdev, mean
 
 # NOTE: File renamed from cci14rev_trading_algorithm.py; class retained as CCI14_120_TradingAlgorithm
 class CCI14_120_TradingAlgorithm(TradingAlgorithm):
-	def __init__(self, contract_params, check_interval, initial_ema, cli_price: float = None, **kwargs):
+	def __init__(self, contract_params, check_interval, initial_ema, cli_price: float = None, tick_size: float = 0.01, sl_ticks: int = 20, tp_ticks_long: int = 30, tp_ticks_short: int = 30, **kwargs):
 		super().__init__(contract_params, **kwargs)
 		# Suppress console output for this algorithm; logs file-only
 		self.log_to_console = False
@@ -13,10 +13,10 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		self.CCI_PERIOD = 14
 		self.K_FAST = 2 / (self.EMA_FAST_PERIOD + 1)
 		self.K_SLOW = 2 / (self.EMA_SLOW_PERIOD + 1)
-		self.TICK_SIZE = 0.01
-		self.SL_TICKS = 20
-		self.TP_TICKS_LONG = 30
-		self.TP_TICKS_SHORT = 30
+		self.TICK_SIZE = tick_size
+		self.SL_TICKS = sl_ticks
+		self.TP_TICKS_LONG = tp_ticks_long
+		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
 		self.price_history = []
 		self.cci_values = []

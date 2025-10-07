@@ -3,7 +3,7 @@ import datetime
 from collections import deque
 
 class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
-	def __init__(self, contract_params, check_interval, initial_ema, ib=None, *, multi_ema_diagnostics=True, ema_spans=(10,20,32,50,100,200), multi_ema_bootstrap=True, bootstrap_lookback_bars=300, classic_cci=False, **kwargs):
+	def __init__(self, contract_params, check_interval, initial_ema, ib=None, *, tick_size: float = 0.01, sl_ticks: int = 18, tp_ticks_long: int = 28, tp_ticks_short: int = 32, multi_ema_diagnostics=True, ema_spans=(10,20,32,50,100,200), multi_ema_bootstrap=True, bootstrap_lookback_bars=300, classic_cci=False, **kwargs):
 		"""CCI14 compare strategy with optional multi-span EMA diagnostics & bootstrap.
 
 		Parameters:
@@ -22,10 +22,10 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		self.CCI_PERIOD = 14
 		self.K_FAST = 2 / (self.EMA_FAST_PERIOD + 1)
 		self.K_SLOW = 2 / (self.EMA_SLOW_PERIOD + 1)
-		self.TICK_SIZE = 0.01
-		self.SL_TICKS = 18
-		self.TP_TICKS_LONG = 28
-		self.TP_TICKS_SHORT = 32
+		self.TICK_SIZE = tick_size
+		self.SL_TICKS = sl_ticks
+		self.TP_TICKS_LONG = tp_ticks_long
+		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
 		self.price_history = []
 		self.cci_values = []

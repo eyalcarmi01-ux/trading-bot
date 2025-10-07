@@ -581,13 +581,13 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		# High-level orchestrated initialization. Each helper is side-effectful on self.
 		self._validate_contract_params(contract_params)
 		self._prepare_client_id(ib, client_id)
-		self._setup_logging(log_name)
 		self._init_connection_config(ib_host, ib_port, connection_attempts, connection_retry_delay, connection_timeout, defer_connection)
 		self._initialize_ib_instance(ib)
 		self._configure_trade_window(trade_timezone, pause_before_hour, new_order_cutoff, shutdown_at)
 		self._configure_force_close(force_close)
 		self._init_test_order_config(test_order_enabled, test_order_action, test_order_qty, test_order_fraction, test_order_delay_sec, test_order_reference_price)
 		self._init_contract(contract_params, ib)
+		self._setup_logging(log_name)
 		self._init_trade_state()
 		# Default multi-EMA spans to compute for all algorithms
 		try:
@@ -723,8 +723,12 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			os.makedirs(self.log_dir, exist_ok=True)
 		except Exception:
 			pass
-		self._log_tag = (log_name or type(self).__name__)
-		_disable = (self._log_tag == 'TradingAlgorithm' and log_name is None)
+		# Build a unique log tag and filename per algo, contract, and date
+		symbol = getattr(self.contract, 'symbol', 'UNK') if hasattr(self, 'contract') else 'UNK'
+		expiry = getattr(self.contract, 'lastTradeDateOrContractMonth', 'UNK') if hasattr(self, 'contract') else 'UNK'
+		today = datetime.datetime.now().strftime('_%Y%m%d')
+		self._log_tag = f"{log_name or type(self).__name__}_{symbol}_{expiry}{today}"
+		_disable = (self._log_tag.startswith('TradingAlgorithm') and log_name is None)
 		self._log_fp = None
 		if not _disable:
 			shared = TradingAlgorithm._shared_logs.get(self._log_tag)
@@ -1244,8 +1248,10 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def _perform_startup_test_order(self):
 		"""Place a small test order and cancel it after a short delay, once per instance."""
 		if self._test_order_done or not self._test_order_enabled:
+			self.log(f"[TEST ORDER] Skipped for contract {getattr(self.contract, 'symbol', 'UNKNOWN')} clientId={getattr(self, 'client_id', 'N/A')} (already done or not enabled)")
 			return
 		try:
+			self.log(f"[TEST ORDER] Attempting for contract {getattr(self.contract, 'symbol', 'UNKNOWN')} clientId={getattr(self, 'client_id', 'N/A')}")
 			# Determine a reference price: explicit override -> cli_price attribute -> live tick
 			ref_price = None
 			source = None
@@ -1656,7 +1662,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			return
 
 	def cancel_all_orders(self):
-		open_orders = self.ib.orders()
+		open_orders = [o for o in self.ib.orders() if getattr(o, 'orderId', None) not in (None, 0)]
 		self.log(f"🔔 Attempting to cancel {len(open_orders)} open orders: {[getattr(o, 'orderId', None) for o in open_orders]}")
 		for order in open_orders:
 			try:
@@ -1666,7 +1672,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				self.log(f"❌ Exception cancelling orderId={getattr(order, 'orderId', None)}: {e}")
 		# Wait briefly and verify cancellation
 		self.ib.sleep(2)
-		remaining_orders = self.ib.orders()
+		remaining_orders = [o for o in self.ib.orders() if getattr(o, 'orderId', None) not in (None, 0)]
 		if remaining_orders:
 			self.log(f"⚠️ {len(remaining_orders)} orders still open after cancel attempt: {[getattr(o, 'orderId', None) for o in remaining_orders]}")
 		else:

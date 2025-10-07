@@ -5,7 +5,7 @@ import json
 import time
 
 class EMATradingAlgorithm(TradingAlgorithm):
-	def __init__(self, contract_params, ema_period, check_interval, initial_ema, signal_override, diagnostics_enabled=False, diagnostics_every=5, ib=None, **kwargs):
+	def __init__(self, contract_params, ema_period, check_interval, initial_ema, signal_override, tick_size: float = 0.01, sl_ticks: int = 17, tp_ticks_long: int = 28, tp_ticks_short: int = 35, diagnostics_enabled=False, diagnostics_every=5, ib=None, **kwargs):
 		"""EMA strategy with optional extended diagnostics.
 
 		Parameters:
@@ -29,10 +29,10 @@ class EMATradingAlgorithm(TradingAlgorithm):
 		self.long_ready = self.short_ready = False
 		self.long_counter = self.short_counter = 0
 		self.paused_notice_shown = False
-		self.TICK_SIZE = 0.01
-		self.SL_TICKS = 17
-		self.TP_TICKS_LONG = 28
-		self.TP_TICKS_SHORT = 35
+		self.TICK_SIZE = tick_size
+		self.SL_TICKS = sl_ticks
+		self.TP_TICKS_LONG = tp_ticks_long
+		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
 		# Diagnostics configuration (kept for compatibility, no-op now that base handles EMA diagnostics)
 		self.diagnostics_enabled = diagnostics_enabled
