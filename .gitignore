@@ -1,3 +1,11 @@
+# Log files
+*.log
 logs/
-# Ignore duplicate root-level test files
-/test_*.py
+*.txt
+__pycache__/
+*.pyc
+.DS_Store
+historical_data/
+backtest_results/
+trades_*.json
+*.pkl
