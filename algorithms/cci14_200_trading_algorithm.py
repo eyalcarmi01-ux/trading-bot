@@ -42,9 +42,6 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
         self.TP_TICKS_LONG = tp_ticks_long
         self.TP_TICKS_SHORT = tp_ticks_short
         self.QUANTITY = 1
-        # State containers
-        self.price_history = []
-        self.cci_values = []
         self.prev_cci = None
         # Trading window configuration
         self.trade_timezone = trade_timezone
@@ -61,7 +58,9 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
     # should_trade_now is provided by the base class and shared across all algorithms
 
     def on_tick(self, time_str: str):
-        self.on_tick_common(time_str)
+        has_position = self.has_active_position()
+
+        self.on_tick_common(time_str, active_position=has_position)
         ctx = self.tick_prologue(
             time_str,
             update_ema=True,
@@ -75,16 +74,18 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
 
         if cci is None:
             return
+             
         # Standard condition-eval log
         self.log_checking_trade_conditions(time_str)
+ 
         action = None
         if cci > 200:
             action = 'SELL'
         elif cci < -200:
             action = 'BUY'
 
-        active = self.has_active_position()
-        if action and not active:
+        has_position = self.has_active_position()
+        if action and not has_position:
             self.place_bracket_order(
                 action,
                 self.QUANTITY,
@@ -96,10 +97,8 @@ class CCI14_200_TradingAlgorithm(TradingAlgorithm):
             self.log(f"{time_str} ✅ Bracket sent ({action}) on CCI14 ±200 threshold\n")
         else:
             self.log(f"{time_str} 🔍 No trade signal at the moment.\n")
-            if active:
+            if has_position:
                 self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
 
     def reset_state(self):
-        self.price_history = []
-        self.cci_values = []
         self.prev_cci = None

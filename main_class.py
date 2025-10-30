@@ -5,6 +5,7 @@ import random
 import os
 from algorithms.ema_trading_algorithm import EMATradingAlgorithm
 from algorithms.fibonacci_trading_algorithm import FibonacciTradingAlgorithm
+from algorithms.fibonacci_v2_trading_algorithm import FibonacciV2TradingAlgorithm
 from algorithms.cci14_compare_trading_algorithm import CCI14_Compare_TradingAlgorithm
 from algorithms.cci14_120_trading_algorithm import CCI14_120_TradingAlgorithm
 from algorithms.cci14_200_trading_algorithm import CCI14_200_TradingAlgorithm
@@ -20,6 +21,7 @@ cci14_compare_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='
 cci14_120_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202511', exchange='NYMEX', currency='USD')
 cci14_200_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202512', exchange='NYMEX', currency='USD')
 nasdaq_cci14_compare_contract_params = dict(symbol='NQ', lastTradeDateOrContractMonth='202512', exchange='CME', currency='USD')
+fibonacci_v2_contract_params = dict(symbol='CL', lastTradeDateOrContractMonth='202603', exchange='NYMEX', currency='USD')
 
 
 FORCE_CLOSE_TIME = (22, 50)  # Daily force-close (HH, MM) applied to all algorithms
@@ -34,16 +36,34 @@ def instantiate_algorithms():
         ema_period=200,
         check_interval=60,
         initial_ema=80,
+        tick_size=0.01,
+        sl_ticks=18,
+        tp_ticks_long=80,
+        tp_ticks_short=80,
         signal_override=0,
         test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
     )
-    fib_algo = FibonacciTradingAlgorithm(
-        contract_params=fib_contract_params,
-        client_id=18,
+    # fib_algo = FibonacciTradingAlgorithm(
+    #     contract_params=fib_contract_params,
+    #     client_id=18,
+    #     check_interval=60,
+    #     fib_levels=[0.236, 0.382, 0.5, 0.618, 0.786],
+    #     test_order_enabled=True,
+    #     defer_connection=True,
+    #     force_close=FORCE_CLOSE_TIME,
+    # )
+    fib_v2_algo = FibonacciV2TradingAlgorithm(
+        contract_params=fibonacci_v2_contract_params,
+        client_id=24,
         check_interval=60,
         fib_levels=[0.236, 0.382, 0.5, 0.618, 0.786],
+        TICK_SIZE=0.01,
+        SL_TICKS=10,
+        TP_TICKS_LONG=100,
+        TP_TICKS_SHORT=100,
+        QUANTITY=1,
         test_order_enabled=True,
         defer_connection=True,
         force_close=FORCE_CLOSE_TIME,
@@ -53,6 +73,10 @@ def instantiate_algorithms():
         client_id=19,
         check_interval=60,
         initial_ema=80,
+        tick_size=0.01,
+        sl_ticks=16,
+        tp_ticks_long=30,
+        tp_ticks_short=30,
         multi_ema_diagnostics=True,
         multi_ema_bootstrap=True,
         test_order_enabled=True,
@@ -65,9 +89,9 @@ def instantiate_algorithms():
         check_interval=60,
         initial_ema=25000,
         tick_size=0.25,
-        sl_ticks=55,
-        tp_ticks_long=200,
-        tp_ticks_short=200,
+        sl_ticks=30,
+        tp_ticks_long=290,
+        tp_ticks_short=290,
         multi_ema_diagnostics=True,
         multi_ema_bootstrap=True,
         test_order_enabled=True,
@@ -79,6 +103,10 @@ def instantiate_algorithms():
         client_id=20,
         check_interval=60,
         initial_ema=80,
+        tick_size=0.01,
+        sl_ticks=18,
+        tp_ticks_long=38,
+        tp_ticks_short=38,
         cli_price=65.0,
         test_order_enabled=True,
         defer_connection=True,
@@ -89,6 +117,7 @@ def instantiate_algorithms():
         client_id=21,
         check_interval=60,
         initial_ema=80,
+        tick_size=0.01,
         sl_ticks=20,            # You can set different values here per instance
         tp_ticks_long=60,       # You can set different values here per instance
         tp_ticks_short=60,      # You can set different values here per instance
@@ -102,7 +131,8 @@ def instantiate_algorithms():
     )
     return [
         ema_algo,
-        fib_algo,
+        # fib_algo,  # Old Fibonacci algorithm commented out
+        fib_v2_algo,
         cci14_compare_algo,
         nasdaq_cci14_compare_algo,
         cci14_120_algo,

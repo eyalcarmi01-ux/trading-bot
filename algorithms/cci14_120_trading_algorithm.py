@@ -18,7 +18,6 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 		self.TP_TICKS_LONG = tp_ticks_long
 		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
-		self.price_history = []
 		self.cci_values = []
 		self.prev_cci = None
 		self.ema_fast = None
@@ -47,14 +46,18 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 
 	def check_long_condition(self):
 		v = self.cci_values
-		return len(v) >= 3 and v[-3] < -120 and v[-2] > -120 and v[-1] > v[-2]
+		return len(v) >= 3 and v[-3] < -150 and v[-2] > -150 and v[-1] > v[-2]
 
 	def check_short_condition(self):
 		v = self.cci_values
-		return len(v) >= 3 and v[-3] >= 120 and v[-2] < 120 and v[-1] < v[-2]
+		return len(v) >= 3 and v[-3] >= 150 and v[-2] < 150 and v[-1] < v[-2]
 
 	def on_tick(self, time_str):
-		self.on_tick_common(time_str)
+		
+		# Check for active position
+		has_position = self.has_active_position();
+
+		self.on_tick_common(time_str, active_position=has_position)
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=True,
@@ -66,48 +69,57 @@ class CCI14_120_TradingAlgorithm(TradingAlgorithm):
 			return
 		price = ctx["price"]
 		cci = ctx["cci"]
-		# Check for active position
-		if self.has_active_position():
-			# Invoke base position handler to enable manual SL breach monitoring & fill scanning
-			self._handle_active_position(time_str)
+
+		# Update CCI history for pattern detection
+		self.cci_values.append(cci)
+		# Keep only last 10 values for performance
+		if len(self.cci_values) > 10:
+			self.cci_values.pop(0)
+			
+		# Update EMA values from base class
+		if "ema" in ctx:
+			self.ema_slow = ctx["ema"]
+		if "ema_fast" in ctx:
+			self.ema_fast = ctx["ema_fast"]
+
+		if has_position:
 			# If handler closed position (manual SL or fill) clear direction
-			if (not self.has_active_position()) and self.active_direction and self.current_sl_price is None:
+			if (not has_position) and self.active_direction and self.current_sl_price is None:
 				self.active_direction = None
 			return
 		# Signal detection
 		long_signal = self.check_long_condition()
 		short_signal = self.check_short_condition()
-		ema_filter_long = self.ema_fast is not None and self.ema_slow is not None and self.ema_fast > self.ema_slow
-		ema_filter_short = self.ema_fast is not None and self.ema_slow is not None and self.ema_fast < self.ema_slow
+		ema_filter_long = price >= self.ema_slow
+		ema_filter_short = price <= self.ema_slow
 		self.log_checking_trade_conditions(time_str)
 		if long_signal:
 			if ema_filter_long:
-				self.log(f"{time_str} ⏳ LONG signal (CCI) + EMA10>EMA200 confirmed — sending bracket order")
+				self.log(f"{time_str} ⏳ LONG signal (CCI) + PRICE>EMA200 confirmed — sending bracket order")
 				self._set_trade_phase('SIGNAL_PENDING', reason='LONG signal ready')
 				prev_entry = self._last_entry_id
 				self.place_bracket_order('BUY', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				# Detect if new entry order appeared; track direction
 				if self._last_entry_id != prev_entry and self._last_entry_id is not None:
 					self.active_direction = 'LONG'
-					self.log(f"{time_str} ✅ LONG trade opened (EMA10 {round(self.ema_fast,4)} > EMA200 {round(self.ema_slow,4)})")
+					self.log(f"{time_str} ✅ LONG trade opened (PRICE {round(price,4)} >= EMA200 {round(self.ema_slow,4)})")
 			else:
-				self.log(f"{time_str} 🔁 LONG CCI pattern but EMA10<=EMA200 — filtered out")
+				self.log(f"{time_str} 🔁 LONG CCI pattern but PRICE < EMA200 — filtered out")
 		elif short_signal:
 			if ema_filter_short:
-				self.log(f"{time_str} ⏳ SHORT signal (CCI) + EMA10<EMA200 confirmed — sending bracket order")
+				self.log(f"{time_str} ⏳ SHORT signal (CCI) + PRICE<EMA200 confirmed — sending bracket order")
 				self._set_trade_phase('SIGNAL_PENDING', reason='SHORT signal ready')
 				prev_entry = self._last_entry_id
 				self.place_bracket_order('SELL', self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
 				if self._last_entry_id != prev_entry and self._last_entry_id is not None:
 					self.active_direction = 'SHORT'
-					self.log(f"{time_str} ✅ SHORT trade opened (EMA10 {round(self.ema_fast,4)} < EMA200 {round(self.ema_slow,4)})")
+					self.log(f"{time_str} ✅ SHORT trade opened (PRICE {round(price,4)} <= EMA200 {round(self.ema_slow,4)})")
 			else:
-				self.log(f"{time_str} 🔁 SHORT CCI pattern but EMA10>=EMA200 — filtered out")
+				self.log(f"{time_str} 🔁 SHORT CCI pattern but PRICE > EMA200 — filtered out")
 		else:
 			self.log(f"{time_str} 🔍 No valid signal — conditions not met\n")
 
 	def reset_state(self):
-		self.price_history = []
 		self.cci_values = []
 		self.prev_cci = None
 		self.ema_fast = None

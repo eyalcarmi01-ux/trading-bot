@@ -27,8 +27,6 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		self.TP_TICKS_LONG = tp_ticks_long
 		self.TP_TICKS_SHORT = tp_ticks_short
 		self.QUANTITY = 1
-		self.price_history = []
-		self.cci_values = []
 		self.prev_cci = None
 		self.ema_fast = initial_ema
 		self.ema_slow = initial_ema
@@ -56,55 +54,58 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 			pass
 
 	# CCI calculation moved to base class (calculate_and_log_cci)
-
 	def on_tick(self, time_str):
-		self.on_tick_common(time_str)
+		has_position = self.has_active_position()
+
+		self.on_tick_common(time_str, active_position=has_position)
+
 		ctx = self.tick_prologue(
 			time_str,
 			update_ema=True,
-			compute_cci=True,
-			price_annotator=lambda: {"EMA10": self.ema_fast, "EMA200": self.ema_slow},
+			compute_cci=True,  # ✅ Let base class handle CCI calculation and history
+			price_annotator=lambda: {"EMA": self.ema_slow},
 		)
 		if ctx is None:
 			return
+			
 		price = ctx["price"]
-		cci = ctx["cci"]
-		# Check for active position
-		if self.has_active_position():
-			self.log(f"{time_str} 🚫 BLOCKED: Trade already active\n")
-			return
-		# Signal detection
-		if len(self.cci_values) >= 2 and self.signal_time is None:
+		cci = ctx["cci"]  # ✅ Get current CCI from base class
+		
+		# Check for active position - but continue data collection
+		if has_position:
+			self.log(f"{time_str} 🚫 BLOCKED: Trade already active")
+			return  # Don't process new signals but continue data collection
+		
+		# Signal detection using base class CCI history
+		if hasattr(self, 'cci_values') and len(self.cci_values) >= 2 and self.signal_time is None:
 			prev_cci = self.cci_values[-2]
-			curr_cci = self.cci_values[-1]
-			if prev_cci < 0 < curr_cci and price > self.ema_fast:
+			current_cci = self.cci_values[-1]
+			
+			# Long signal: 
+			if prev_cci < 0 and current_cci > prev_cci and price > self.ema_slow:
 				self.signal_time = datetime.datetime.now()
 				self.signal_action = 'BUY'
-				self._set_trade_phase('SIGNAL_PENDING', reason='BUY CCI cross')
-				self.log(f"{time_str} ⏳ BUY signal detected — waiting 3 minutes")
-			elif prev_cci > 0 > curr_cci and price < self.ema_fast:
+				self.log(f"{time_str} 📈 LONG signal detected: CCI {prev_cci:.2f} -> {current_cci:.2f} | Price {price} > EMA Slow {self.ema_slow}")
+			
+			# Short signal:   
+			elif prev_cci > 0 and current_cci < prev_cci and price < self.ema_slow:
 				self.signal_time = datetime.datetime.now()
 				self.signal_action = 'SELL'
-				self._set_trade_phase('SIGNAL_PENDING', reason='SELL CCI cross')
-				self.log(f"{time_str} ⏳ SELL signal detected — waiting 3 minutes")
-			else:
-				self.log(f"{time_str} 🔍 No valid signal — conditions not met\n")
-		# After 3 minutes, send bracket order
+				self.log(f"{time_str} 📉 SHORT signal detected: CCI {prev_cci:.2f} -> {current_cci:.2f} | Price {price} < EMA Slow {self.ema_slow}")
+		
+		# Execute after 3-minute delay
 		if self.signal_time is not None:
 			elapsed = (datetime.datetime.now() - self.signal_time).total_seconds()
-			if elapsed >= 180:
-				import threading
-				def order_thread():
-					self.place_bracket_order(self.signal_action, self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
-					self.log(f"{time_str} ✅ Bracket sent — bot in active position\n")
-				t = threading.Thread(target=order_thread, name="BracketOrderThread")
-				t.daemon = True
-				t.start()
+			if elapsed >= 0:  # Changed from 180 to 0 for immediate execution
+				self.place_bracket_order(self.signal_action, self.QUANTITY, self.TICK_SIZE, self.SL_TICKS, self.TP_TICKS_LONG, self.TP_TICKS_SHORT)
+				self.log(f"{time_str} ✅ Bracket sent — bot in active position")
 				self.signal_time = None
 				self.signal_action = None
-			else:
-				remaining = round(180 - elapsed)
-				self.log(f"{time_str} ⏳ Waiting {remaining}s before sending bracket\n")
+			#else:
+			#	remaining = round(0 - elapsed)
+			#	self.log(f"{time_str} ⏳ Waiting {remaining}s before sending bracket")
+		else:
+			self.log(f"{time_str} 🔍 No valid signal — conditions not met")
 
 	def pre_run(self):  # Hook invoked by base run()
 		"""Rely on base class generic seeding and indicator priming; diagnostics stay enabled."""
@@ -113,8 +114,6 @@ class CCI14_Compare_TradingAlgorithm(TradingAlgorithm):
 		pass
 
 	def reset_state(self):
-		self.price_history = []
-		self.cci_values = []
 		self.prev_cci = None
 		self.ema_fast = None
 		self.ema_slow = None

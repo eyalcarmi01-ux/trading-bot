@@ -203,6 +203,11 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def log_price(self, time_str, price, **kwargs):
 		"""Standardized logging for price and indicators. kwargs can include EMA, CCI, etc."""
 		msg = f"{time_str} 📊 Price: {price}"
+		# Print both close_history and tp_history latest values for diagnostics
+		if hasattr(self, 'close_history') and self.close_history:
+			msg += f" | close_history[-1]: {self.close_history[-1]}"
+		if hasattr(self, 'tp_history') and self.tp_history:
+			msg += f" | tp_history[-1]: {self.tp_history[-1]}"
 		for key, value in kwargs.items():
 			msg += f" | {key}: {value}"
 		self.log(msg)
@@ -340,10 +345,10 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			pass
 
 	def compute_and_log_cci(self, time_str: str):
-		"""Compute CCI using the base calculator; append to cci_values and return it."""
+		"""Compute CCI using tp_history (filtered closes); append to cci_values and return it."""
 		cci = None
 		try:
-			prices = getattr(self, 'price_history', []) or []
+			prices = getattr(self, 'tp_history', []) or []
 			period = getattr(self, 'CCI_PERIOD', 14)
 			if len(prices) >= period:
 				cci = self.calculate_and_log_cci(prices, time_str)
@@ -506,19 +511,22 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 			return None
 
 	def update_price_history(self, price, maxlen=500):
-		if not hasattr(self, 'price_history'):
-			self.price_history = []
-		# Prime prev_market_price from existing history before appending (legacy-parity helper)
-		try:
-			if self.price_history:
-				self.prev_market_price = self.price_history[-1]
-		except Exception:
-			pass
-		if not self.price_history or price != self.price_history[-1]:
-			self.price_history.append(price)
-			if len(self.price_history) > maxlen:
-				self.price_history = self.price_history[-maxlen:]
-
+		# Maintain two histories: close_history (all closes) and tp_history (filtered for CCI)
+		if not hasattr(self, 'close_history'):
+			self.close_history = []
+		if not hasattr(self, 'tp_history'):
+			self.tp_history = []
+		# Update close_history (all closes, no filtering)
+		self.close_history.append(price)
+		if len(self.close_history) > maxlen:
+			self.close_history = self.close_history[-maxlen:]
+		# Update tp_history (filter consecutive duplicates)
+		if not self.tp_history or price != self.tp_history[-1]:
+			self.tp_history.append(price)
+			if len(self.tp_history) > maxlen:
+				self.tp_history = self.tp_history[-maxlen:]
+		# For backward compatibility, keep price_history as tp_history
+		self.price_history = self.tp_history
 	def has_active_position(self):
 		"""Return True if there is an active position OR a working transmitted order for this contract.
 		This blocks sending a new bracket while the previous one is still working (global pending-aware gating).
@@ -562,7 +570,7 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 		except Exception:
 			pass
 		return False
-
+	
 	def _handle_active_position(self, time_str):
 		self.log(f"{time_str} 🔒 Position active — monitoring only")
 		if self.trade_phase not in ('ACTIVE', 'EXITING'):
@@ -2026,7 +2034,30 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 	def on_tick(self, time_str):
 		raise NotImplementedError("Subclasses must implement on_tick() and should call on_tick_common(time_str) at the start.")
 
-	def on_tick_common(self, time_str):
+	def on_tick_common(self, time_str,active_position=None):
+		# Check TWS connection health
+		try:
+			if not self.ib.isConnected():
+				self.log(f"⚠️ {time_str} TWS disconnected - attempting reconnection")
+				self.reconnect()
+				if not self.ib.isConnected():
+					self.log(f"❌ {time_str} Reconnection failed - skipping tick")
+					return False
+		except Exception as e:
+			self.log_exception(e, context=f"TWS health check {time_str}")
+			return False
+		
+		# Handle active position logic with optional parameter
+		if active_position is None:
+			# Default behavior: check for active position
+			has_position = self.has_active_position()
+		else:
+			# Use provided parameter (True/False)
+			has_position = bool(active_position)
+
+		if has_position:
+			self._handle_active_position(time_str)
+
 		# Log if order placement is in progress, but do not return early
 		with self._lock:
 			if getattr(self, 'trade_phase', None) == 'ORDER_PLACING':
@@ -2119,30 +2150,22 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 
 	# --------------------------- Generic Seeding Utilities ---------------------------
 	def seed_price_history(self, *, bars_needed: int = 500, minutes: int = 500, cap: int = 500, extend: bool = False) -> int:
-		"""Seed self.price_history from recent 1-min historical closes.
-
-		- Uses seconds-based duration to avoid 'M' ambiguity (months) in IB API.
-		- Logs a concise summary including count and a small sample of bars.
-		- Returns the number of bars added or assigned; 0 on skip/failure.
-
-		extend=False will assign the fetched series if history is empty; otherwise replaces only when not extend.
-		"""
-		# Ensure container exists
-		if not hasattr(self, 'price_history') or self.price_history is None:
-			self.price_history = []
-		# Skip in tests/mocks or when not connected
+		"""Seed both close_history (all closes) and tp_history (filtered) from recent 1-min historical closes."""
+		# Ensure containers exist
+		if not hasattr(self, 'close_history') or self.close_history is None:
+			self.close_history = []
+		if not hasattr(self, 'tp_history') or self.tp_history is None:
+			self.tp_history = []
 		ib_ref = getattr(self, 'ib', None)
 		try:
 			if ib_ref is None:
 				return 0
-			# Treat MagicMock-like test doubles as non-live
 			if hasattr(ib_ref, 'call_count'):
 				return 0
 			if not ib_ref.isConnected():
 				return 0
 		except Exception:
 			return 0
-		# Calculate duration in seconds; add small buffer to improve chance of bars_needed being met
 		try:
 			minutes = int(minutes) if isinstance(minutes, int) else bars_needed
 			seconds = max((minutes * 60) + 120, bars_needed * 60)
@@ -2171,64 +2194,23 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				self.log(f"🗄️ Generic seed history: duration={duration} | bars={count} | sample={sample}")
 			except Exception:
 				pass
-				# Log ALL closes pulled (chunked to keep line lengths reasonable)
-				try:
-					if bars:
-						entries = []
-						for idx, b in enumerate(bars, start=1):
-							date = getattr(b, 'date', None) or getattr(b, 'time', None)
-							close = getattr(b, 'close', None)
-							entries.append(f"#{idx}:{date}|{close}")
-						# chunk into groups of ~40 per line
-						chunk = 40
-						for i in range(0, len(entries), chunk):
-							segment = ", ".join(entries[i:i+chunk])
-							self.log(f"🗄️ Seeded closes [{i+1}-{min(i+chunk, len(entries))}]: {segment}")
-				except Exception:
-					pass
-				# Export ALL closes to CSV (timestamp, index, close)
-				try:
-					if bars and getattr(self, '_seed_csv_path', None):
-						rows = []
-						for idx, b in enumerate(bars, start=1):
-							date = getattr(b, 'date', None) or getattr(b, 'time', None)
-							close = getattr(b, 'close', None)
-							rows.append([datetime.datetime.now().isoformat(timespec='seconds'), idx, str(date), close])
-						self._append_csv_rows(self._seed_csv_path, ['written_at', 'index', 'timestamp', 'close'], rows)
-						self.log(f"📤 Exported {len(rows)} seeded bars to CSV: {os.path.basename(self._seed_csv_path)}")
-				except Exception:
-					pass
-				# Also export the same seed history to Elasticsearch (single doc with all bars)
-				try:
-					if bars:
-						self._es_log_seed_history(bars)
-				except Exception:
-					pass
+			# Log ALL closes pulled (for close_history)
 			closes = [b.close for b in bars if hasattr(b, 'close')]
-			if not closes:
-				return 0
-			added = 0
-			if extend and self.price_history:
-				for close in closes[-bars_needed:]:
-					if not self.price_history or close != self.price_history[-1]:
-						self.price_history.append(close)
-				added = len(self.price_history)
-			else:
-				# Assign up to cap; if already have data, prefer assign when not extend
-				filtered = []
-				for close in closes[-max(min(cap, len(closes)), bars_needed):]:
-					if not filtered or close != filtered[-1]:
-						filtered.append(close)
-				self.price_history = filtered
-				added = len(self.price_history)
-			# Enforce cap
-			if len(self.price_history) > cap:
-				self.price_history = self.price_history[-cap:]
-			self.log(f"🧪 Generic seed complete: history={len(self.price_history)} bars")
-			# Dump exactly the closes used for priming (up to bars_needed; if fewer available, dump all)
+			self.close_history = closes[-max(min(cap, len(closes)), bars_needed):]
+			# Build tp_history by filtering consecutive duplicates
+			filtered = []
+			for close in self.close_history:
+				if not filtered or close != filtered[-1]:
+					filtered.append(close)
+			self.tp_history = filtered[-max(min(cap, len(filtered)), bars_needed):]
+			# For backward compatibility, keep price_history as tp_history
+			self.price_history = self.tp_history
+			added = len(self.tp_history)
+			self.log(f"🧪 Generic seed complete: close_history={len(self.close_history)} bars, tp_history={len(self.tp_history)} bars")
+			# Dump closes used for priming (tp_history)
 			try:
-				used_n = min(len(self.price_history), bars_needed)
-				used = self.price_history[-used_n:]
+				used_n = min(len(self.tp_history), bars_needed)
+				used = self.tp_history[-used_n:]
 				entries = [f"#{i+1}:{v}" for i, v in enumerate(used)]
 				chunk = 50
 				for i in range(0, len(entries), chunk):
@@ -2236,11 +2218,25 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 					self.log(f"🗄️ Used closes for priming [{i+1}-{min(i+chunk, len(entries))}/{used_n}]: {segment}")
 			except Exception:
 				pass
-			# Export the exact used closes for priming to CSV (index, close)
+			# Export close_history and tp_history to CSV
 			try:
+				if getattr(self, '_seed_csv_path', None):
+					rows = []
+					for idx, close in enumerate(self.close_history, start=1):
+						rows.append([datetime.datetime.now().isoformat(timespec='seconds'), idx, close])
+					self._append_csv_rows(self._seed_csv_path, ['written_at', 'index', 'close'], rows)
+					self.log(f"📤 Exported {len(rows)} closes to CSV: {os.path.basename(self._seed_csv_path)}")
+				# Also export tp_history to a separate CSV for diagnostics
+				if getattr(self, '_seed_csv_path', None):
+					tp_rows = []
+					for idx, close in enumerate(self.tp_history, start=1):
+						tp_rows.append([datetime.datetime.now().isoformat(timespec='seconds'), idx, close])
+					tp_csv_path = self._seed_csv_path.replace('.csv', '_tp.csv')
+					self._append_csv_rows(tp_csv_path, ['written_at', 'index', 'close'], tp_rows)
+					self.log(f"📤 Exported {len(tp_rows)} TP closes to CSV: {os.path.basename(tp_csv_path)}")
 				if getattr(self, '_priming_csv_path', None):
-					used_n = min(len(self.price_history), bars_needed)
-					used = self.price_history[-used_n:]
+					used_n = min(len(self.tp_history), bars_needed)
+					used = self.tp_history[-used_n:]
 					rows = [[datetime.datetime.now().isoformat(timespec='seconds'), i+1, v] for i, v in enumerate(used)]
 					self._append_csv_rows(self._priming_csv_path, ['written_at', 'index', 'close'], rows)
 					self.log(f"📤 Exported {len(rows)} priming closes to CSV: {os.path.basename(self._priming_csv_path)}")
@@ -2248,8 +2244,8 @@ class TradingAlgorithm(metaclass=MethodLoggingMeta):
 				pass
 			# Also export the exact used closes for priming to Elasticsearch (single doc)
 			try:
-				used_n = min(len(self.price_history), bars_needed)
-				used = self.price_history[-used_n:]
+				used_n = min(len(self.tp_history), bars_needed)
+				used = self.tp_history[-used_n:]
 				self._es_log_priming_used(used)
 			except Exception:
 				pass
